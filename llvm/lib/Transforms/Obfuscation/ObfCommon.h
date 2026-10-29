@@ -84,7 +84,7 @@ inline bool isNoObf(const llvm::Function &F) {
   F.getMetadata("annotation", Ann);
   for (llvm::MDNode *N : Ann)
     for (const llvm::MDOperand &Op : N->operands())
-      if (const auto *S = llvm::mdconst::dyn_extract<llvm::MDString>(Op))
+      if (const auto *S = llvm::dyn_cast_or_null<llvm::MDString>(Op.get()))
         if (S->getString() == "no_obf")
           return true;
 

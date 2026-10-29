@@ -100,7 +100,7 @@ static void insertUdfTrap(Function &F, BasicBlock *BB, uint64_t &S) {
 static void insertFakeFrame(Function &F, BasicBlock *BB, uint64_t &S) {
   Module &M = *F.getParent();
   auto *I64 = Type::getInt64Ty(M.getContext());
-  IRBuilder<> IB(BB->getFirstNonPHIOrDbgOrAlloca());
+  IRBuilder<> IB(BB, BB->getFirstNonPHIOrDbgOrAlloca());
   Value *Slot = IB.CreateAlloca(I64, nullptr, "obf.ghost");
   StoreInst *St =
       IB.CreateStore(ConstantInt::get(I64, splitmix64(S)), Slot, true);
