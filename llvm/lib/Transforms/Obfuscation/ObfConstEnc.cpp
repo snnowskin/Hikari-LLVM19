@@ -127,7 +127,7 @@ static bool extractBits(Constant *C, APInt &Bits, IntegerType *&IntTy,
 
   // 标量整数
   if (auto *CI = dyn_cast<ConstantInt>(C)) {
-    IntTy = CI->getType();
+    IntTy = CI->getIntegerType();
     Bits = CI->getValue();
     return true;
   }

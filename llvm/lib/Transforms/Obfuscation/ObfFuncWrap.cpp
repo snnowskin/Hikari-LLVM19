@@ -110,7 +110,7 @@ static Function *buildWrapper(Module &M, Function &Callee, Function &Target,
   Constant *Enc = ConstantExpr::getXor(
       ConstantExpr::getPtrToInt(&Target, I64), ConstantInt::get(I64, Key));
   GlobalVariable *Tab =
-      getCalleeTable(M, {Enc}, "obf.fw.tab." + Callee.getName());
+      getCalleeTable(M, {Enc}, ("obf.fw.tab." + Callee.getName()).str());
 
     // 入口：压 cookie
   IRBuilder<> B(Entry);
