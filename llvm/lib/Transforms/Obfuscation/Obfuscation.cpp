@@ -8,9 +8,13 @@
 */
 #include "llvm/Transforms/Obfuscation/Obfuscation.h"
 #include "llvm/Transforms/Obfuscation/Utils.h"
+#include "ObfCommon.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 
 using namespace llvm;
@@ -216,6 +220,28 @@ struct Obfuscation : public ModulePass {
     // 这里换成纯 IR 转发的重做版：TLS cookie 栈 + 加密 callee 表 + 失败即 brk #0。
     if (EnableAllObfuscation || EnableFunctionWrapper)
       obf::processFunctionWrapper(M);
+
+    // [诊断] 混淆产物自检：坏 IR 在这里就以文字形式暴露，而不是在 codegen 里
+    // 以 Exception Code 0x80000003 崩（release 版 verifier 默认是关的，
+    // clang 的 cc1 参数里带着 -disable-llvm-verifier）。
+    if (!obf::ObfDumpIR.empty()) {
+      std::error_code EC;
+      raw_fd_ostream OS(obf::ObfDumpIR, EC);
+      if (!EC) {
+        M.print(OS, nullptr);
+        OS.close();
+        errs() << "obf: IR dumped to " << obf::ObfDumpIR << "\n";
+      } else {
+        errs() << "obf: cannot write " << obf::ObfDumpIR << ": "
+               << EC.message() << "\n";
+      }
+    }
+    if (obf::ObfVerify) {
+      bool Bad = verifyModule(M, &errs());
+      errs() << "obf: verify " << (Bad ? "FAILED" : "ok") << "\n";
+      if (Bad)
+        report_fatal_error("obf: 混淆产生了非法 IR，见上面的 verifier 输出");
+    }
     // Cleanup Flags
     SmallVector<Function *, 8> toDelete;
     for (Function &F : M)

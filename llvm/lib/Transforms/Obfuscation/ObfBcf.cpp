@@ -260,12 +260,17 @@ bool processBogusControlFlow(Function &F) {
       if (!Guard || !Join)
         continue;
 
-      // PHI 修正：Succ 里「来自 BB」的入边全部改写成「来自 Join」。
-      // 不做这一步，verifier 会报 "PHI node entries do not match predecessors"。
+      // PHI 修正（B8）：这条边从 BB 改到了 Guard→Join→Succ，所以 Succ 里
+      // 「来自 BB」的入边要挪一条给 Join —— 只挪一条。
+      // 原先写的是「把所有来自 BB 的入边都改成 Join」，当 BB 有两条边指向同一个
+      // Succ 时（cond br 两支同目标），两条都变成 Join，而 Join 只有一条边，
+      // verifier 报「phi 里的入边比前驱多」，落到 codegen 就是 0x80000003。
       for (PHINode &Phi : Succ->phis())
         for (unsigned K = 0; K < Phi.getNumIncomingValues(); ++K)
-          if (Phi.getIncomingBlock(K) == BB)
+          if (Phi.getIncomingBlock(K) == BB) {
             Phi.setIncomingBlock(K, Join);
+            break;
+          }
 
       T->setSuccessor(I, Guard);
       Changed = true;

@@ -39,6 +39,12 @@ extern llvm::cl::opt<int>      JunkProb;
 extern llvm::cl::opt<int>      SjiLevel;
 extern llvm::cl::opt<int>      SjiRatio;
 
+// 诊断开关（默认关，出问题才开）
+// -mllvm -obf-verify      混淆后跑 verifier，坏 IR 立刻报文字而不是在 codegen 里崩
+// -mllvm -obf-dump-ir=<p> 混淆后把模块 IR 写到文件，配 check_ir.py 静态核对
+extern llvm::cl::opt<bool>        ObfVerify;
+extern llvm::cl::opt<std::string> ObfDumpIR;
+
 // ── 种子派生 ──
 /// splitmix64：小、快、分布够。禁止用来做密码学，这里只是打散。
 inline uint64_t splitmix64(uint64_t &S) {

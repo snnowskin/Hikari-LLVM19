@@ -56,6 +56,12 @@ static void insertDataIsland(Function &F, BasicBlock *BB, uint64_t &S,
   if (!Term || isa<ReturnInst>(Term))
     return; // 返回点不插：避免影响尾声布局
 
+  // 只处理单后继边（无条件 br）。多后继（cond br / switch / indirectbr）一旦把
+  // 终结符换成「条件跳 island / 跳 real」，另一条边就被吃掉，语义直接错，
+  // 且那条边的后继块会留下没人认领的 PHI 入边 → verifier 崩、codegen 0x80000003。
+  if (Term->getNumSuccessors() != 1)
+    return;
+
   BasicBlock *Real = Term->getSuccessor(0);
   if (!Real || Real == BB || Real->getParent() != &F || Real->isEHPad())
     return;
@@ -72,6 +78,13 @@ static void insertDataIsland(Function &F, BasicBlock *BB, uint64_t &S,
   BranchInst *BI = BranchInst::Create(Island, Real, NotPred, Term);
   Term->eraseFromParent();
   (void)BI;
+
+  // PHI 修正（B7）：Real 现在多了一个前驱 Island，原来的「来自 BB」那条还在
+  // （BB 仍然直接跳 Real），所以只需给 Island 补一条同值入边；漏了这一步
+  // Real 里所有 PHI 都会「前驱集合与实际前驱不匹配」。
+  for (PHINode &PN : Real->phis())
+    if (Value *V = PN.getIncomingValueForBlock(BB))
+      PN.addIncoming(V, Island);
 }
 
 /// J1b：udf 陷阱。放在一个恒不可达的块里，专坑 Frida Memory.scan 与 JIT。
@@ -80,6 +93,9 @@ static void insertUdfTrap(Function &F, BasicBlock *BB, uint64_t &S) {
   LLVMContext &C = M.getContext();
   Instruction *Term = BB->getTerminator();
   if (!Term || isa<ReturnInst>(Term))
+    return;
+  // 同 insertDataIsland：多后继终结符不能整个换掉，会吃掉别的边
+  if (Term->getNumSuccessors() != 1)
     return;
 
   auto *Trap = BasicBlock::Create(C, "obf.udf", &F);

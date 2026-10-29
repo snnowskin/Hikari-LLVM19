@@ -51,12 +51,26 @@ jobs:
       - name: 编译
         run: ninja -C build clang -k 0
 
-      - name: 自检
+      - name: 自检（混淆闸门）
         run: |
-          ./build/bin/clang --version
-          printf 'const char*m(void){return "OBF_MARKER";}\n' > /tmp/p.c
-          ./build/bin/clang --target=aarch64-linux-gnu -O1 -S -emit-llvm -o - /tmp/p.c \
-            -mllvm -hikari -mllvm -enable-strcry -mllvm -obf-level=3 | grep -c 'obf\.' || true
+          CC=./build/bin/clang
+          $CC --version
+          FLAGS="-mllvm -hikari -mllvm -obf-level=3 -mllvm -obf-seed=0x51A9 \
+                 -mllvm -enable-strcry -mllvm -enable-cffobf -mllvm -enable-subobf \
+                 -mllvm -enable-indibran -mllvm -obf-junk-prob=100 \
+                 -mllvm -obf-bcf-prob=100 -mllvm -obf-ce-prob=100 \
+                 -mllvm -obf-wrap-prob=100 -mllvm -obf-sji=3 -mllvm -obf-sji-ratio=90"
+          # 1) 基线：明文必须在
+          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o /tmp/base.o
+          grep -aq OBF_PROBE_PLAINTEXT_9f3a /tmp/base.o && echo "OK 基线有明文"
+          # 2) L3 全开 + verifier：坏 IR 立刻失败（不给 codegen 崩的机会）
+          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o /tmp/obf.o $FLAGS \
+            -mllvm -obf-verify -mllvm -obf-dump-ir=/tmp/obf.ll
+          grep -aq OBF_PROBE_PLAINTEXT_9f3a /tmp/obf.o && { echo "FAIL 混淆后明文还在"; exit 1; }
+          echo "OK 明文已消失"
+          # 3) 结构核对：间接跳转存在、PHI/前驱一致
+          grep -aq 'indirectbr' /tmp/obf.ll && echo "OK 有 indirectbr"
+          python3 tests/check_ir.py /tmp/obf.ll
 
       - name: 打包
         run: |

@@ -16,4 +16,14 @@ llvm::cl::opt<uint64_t> ObfSeed(
     llvm::cl::desc("构建种子（必须固定，否则同版本两次构建产物不同）"),
     llvm::cl::init(0x1337));
 
+llvm::cl::opt<bool> ObfVerify(
+    "obf-verify",
+    llvm::cl::desc("混淆后跑 verifier：坏 IR 立刻报文本，而不是在 codegen 里崩"),
+    llvm::cl::init(false));
+
+llvm::cl::opt<std::string> ObfDumpIR(
+    "obf-dump-ir",
+    llvm::cl::desc("混淆后把模块 IR 写到该文件（默认空=不写）"),
+    llvm::cl::init(""));
+
 } // namespace obf
