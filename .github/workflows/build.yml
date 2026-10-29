@@ -74,6 +74,8 @@ jobs:
 
   windows:
     name: clang.exe (windows-x86_64)
+    # 需要编 Windows 版时再打开：仓库变量 BUILD_WINDOWS=1
+    if: vars.BUILD_WINDOWS == '1'
     runs-on: windows-2022
     timeout-minutes: 355
     continue-on-error: true
