@@ -1,0 +1,135 @@
+name: build-clang
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'llvm/lib/Transforms/Obfuscation/**'
+      - '.github/workflows/build.yml'
+
+concurrency:
+  group: build-clang-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: clang (linux-x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build ccache cmake python3
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-${{ hashFiles('llvm/lib/Transforms/Obfuscation/**') }}
+          restore-keys: ccache-linux-
+
+      - name: 配置
+        run: |
+          ccache --max-size=2G
+          cmake -G Ninja -S llvm -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_ENABLE_ASSERTIONS=OFF \
+            -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF \
+            -DLLVM_ENABLE_TERMINFO=OFF \
+            -DLLVM_ENABLE_LIBXML2=OFF \
+            -DLLVM_PARALLEL_LINK_JOBS=1 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: 编译
+        run: ninja -C build clang
+
+      - name: 自检
+        run: |
+          ./build/bin/clang --version
+          printf 'const char*m(void){return "OBF_MARKER";}\n' > /tmp/p.c
+          ./build/bin/clang --target=aarch64-linux-gnu -O1 -S -emit-llvm -o - /tmp/p.c \
+            -mllvm -hikari -mllvm -enable-strcry -mllvm -obf-level=3 | grep -c 'obf\.' || true
+
+      - name: 打包
+        run: |
+          mkdir -p out/bin out/lib
+          cp build/bin/clang build/bin/clang++ out/bin/ 2>/dev/null || true
+          cp -r build/lib/clang out/lib/ 2>/dev/null || true
+          tar -czf clang-linux-x86_64.tar.gz -C out .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clang-linux-x86_64
+          path: clang-linux-x86_64.tar.gz
+          retention-days: 14
+          compression-level: 0
+
+  windows:
+    name: clang.exe (windows-x86_64)
+    runs-on: windows-2022
+    timeout-minutes: 355
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: ccache
+        run: choco install ccache -y --no-progress
+
+      - uses: actions/cache@v4
+        with:
+          path: C:\Users\runneradmin\AppData\Local\ccache
+          key: ccache-win-${{ hashFiles('llvm/lib/Transforms/Obfuscation/**') }}
+          restore-keys: ccache-win-
+
+      - name: 配置
+        run: |
+          cmake -G Ninja -S llvm -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DLLVM_ENABLE_PROJECTS=clang `
+            -DLLVM_TARGETS_TO_BUILD=AArch64 `
+            -DLLVM_ENABLE_ASSERTIONS=OFF `
+            -DLLVM_ENABLE_ZSTD=OFF `
+            -DLLVM_ENABLE_ZLIB=OFF `
+            -DLLVM_ENABLE_TERMINFO=OFF `
+            -DLLVM_ENABLE_LIBXML2=OFF `
+            -DLLVM_ENABLE_LIBEDIT=OFF `
+            -DLLVM_ENABLE_CURL=OFF `
+            -DLLVM_PARALLEL_LINK_JOBS=1
+
+      - name: 编译
+        run: cmake --build build --target clang -- -j 4
+
+      - name: 自检
+        run: |
+          .\build\bin\clang.exe --version
+          Set-Content -Path p.c -Value 'const char*m(void){return "OBF_MARKER";}'
+          $ir = .\build\bin\clang.exe --target=aarch64-linux-gnu -O1 -S -emit-llvm -o - p.c `
+            -mllvm -hikari -mllvm -enable-strcry -mllvm -obf-level=3 2>&1
+          ($ir | Select-String -Pattern 'obf\.').Count
+
+      - name: 打包
+        run: |
+          New-Item -ItemType Directory -Force out\bin, out\lib | Out-Null
+          Copy-Item build\bin\clang.exe out\bin\
+          Copy-Item build\bin\clang++.exe out\bin\ -ErrorAction SilentlyContinue
+          Copy-Item build\lib\clang out\lib\ -Recurse -ErrorAction SilentlyContinue
+          Compress-Archive -Path out\* -DestinationPath clang-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clang-windows-x86_64
+          path: clang-windows-x86_64.zip
+          retention-days: 14
+          compression-level: 0
