@@ -1,0 +1,57 @@
+name: build-and-smoke
+
+# 目标：验证「OLLVM 魔改」在 LLVM 20.1.5 上能编过、能跑、且混淆真的生效。
+# 只编 AArch64 目标 + clang，控制在可接受的时间里。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  aarch64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gcc g++ python3 zlib1g-dev \
+                                  libzstd-dev binutils-aarch64-linux-gnu
+
+      # ccache 让第二次起快很多；LLVM 这种量级必须有缓存，否则每次 40 分钟起步
+      - name: 缓存
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: 3G
+
+      - name: 配置（仅 AArch64 + clang，Release + Assertions）
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_TARGETS_TO_BUILD="AArch64" \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_ENABLE_ZSTD=ON \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_CCACHE_BUILD=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: 只编需要的目标（clang / llvm-objdump / FileCheck）
+        run: |
+          ninja -C build clang llvm-objdump llvm-readobj FileCheck
+
+      - name: 冒烟 —— 混淆必须真的生效
+        run: bash tests/run_smoke.sh build
+
+      - name: 强度回归 —— d810 若全量能跑完说明平坦化太弱
+        continue-on-error: true
+        run: |
+          echo "可选门禁：装 d810-ng 后对 tests/smoke 产物跑全量化简。"
+          echo "若 30 分钟内跑完且无残留 dispatch，说明 §4.1/§4.5 需要加强。"
