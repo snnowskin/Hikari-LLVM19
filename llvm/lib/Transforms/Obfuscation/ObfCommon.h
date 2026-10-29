@@ -128,7 +128,7 @@ inline llvm::Value *loadSeedSlot(llvm::Module &M, llvm::IRBuilder<> &B,
 
   llvm::GlobalVariable *GV = M.getGlobalVariable(Name);
   if (!GV) {
-    GV = new llvm::GlobalVariable(M, Ty, /*isConstant=*/false,
+    GV = new llvm::GlobalVariable(M, Ty, false,
                                   llvm::GlobalValue::InternalLinkage,
                                   llvm::ConstantAggregateZero::get(Ty), Name);
     GV->setAlignment(llvm::Align(8));
@@ -137,7 +137,7 @@ inline llvm::Value *loadSeedSlot(llvm::Module &M, llvm::IRBuilder<> &B,
 
   auto *GEP = B.CreateInBoundsGEP(
       Ty, GV, {B.getInt64(0), B.getInt64(0)}, Name + ".p");
-  llvm::LoadInst *L = B.CreateLoad(I64, GEP, /*isVolatile=*/true, Name + ".v");
+  llvm::LoadInst *L = B.CreateLoad(I64, GEP, true, Name + ".v");
   L->setAlignment(llvm::Align(8));
   return L;
 }

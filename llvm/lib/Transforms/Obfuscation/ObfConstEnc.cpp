@@ -31,7 +31,7 @@ static GlobalVariable *getKeyTable(Module &M, uint64_t &S) {
   for (unsigned I = 0; I < kKeySlots; ++I)
     Items.push_back(ConstantInt::get(I64, splitmix64(T)));
 
-  auto *GV = new GlobalVariable(M, Ty, /*isConstant=*/false,
+  auto *GV = new GlobalVariable(M, Ty, false,
                                 GlobalValue::InternalLinkage,
                                 ConstantArray::get(Ty, Items), "obf.ce.keys");
   GV->setSection(".data.obf");
@@ -50,7 +50,7 @@ static Value *loadKey(Module &M, IRBuilder<> &B, IntegerType *Ty, unsigned Idx) 
   auto *ArrTy = cast<ArrayType>(GV->getValueType());
   Value *P = B.CreateInBoundsGEP(ArrTy, GV,
                                  {B.getInt64(0), B.getInt64(Idx % kKeySlots)});
-  Value *V = B.CreateLoad(I64, P, /*isVolatile=*/true, "obf.ce.k");
+  Value *V = B.CreateLoad(I64, P, true, "obf.ce.k");
   unsigned W = Ty->getIntegerBitWidth();
   if (W == 64)
     return V;

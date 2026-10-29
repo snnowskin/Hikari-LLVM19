@@ -138,7 +138,7 @@ static bool rewriteStrings(Module &M, uint64_t &S) {
     BlobVals.push_back(ConstantInt::get(I8, B));
 
   auto *BlobGV = new GlobalVariable(
-      M, BlobTy, /*isConstant=*/true, GlobalValue::InternalLinkage,
+      M, BlobTy, true, GlobalValue::InternalLinkage,
       ConstantArray::get(BlobTy, BlobVals), "obf_str_blob");
   BlobGV->setSection(".data.obfstr");
   BlobGV->setAlignment(Align(16));
@@ -157,7 +157,7 @@ static bool rewriteStrings(Module &M, uint64_t &S) {
     DescVals.push_back(ConstantArray::get(DescTy, F));
   }
   auto *DescGV = new GlobalVariable(
-      M, DescArrTy, /*isConstant=*/true, GlobalValue::InternalLinkage,
+      M, DescArrTy, true, GlobalValue::InternalLinkage,
       ConstantArray::get(DescArrTy, DescVals), "obf_str_desc");
   DescGV->setSection(".data.obfstr");
   DescGV->setAlignment(Align(8));
@@ -165,7 +165,7 @@ static bool rewriteStrings(Module &M, uint64_t &S) {
 
     // 4. 解密器 hikari_str_get(u32 id) -> i8*
   FunctionType *GetterTy =
-      FunctionType::get(P0, {I32}, /*isVarArg=*/false);
+      FunctionType::get(P0, {I32}, false);
   Function *Getter =
       Function::Create(GetterTy, GlobalValue::InternalLinkage,
                        "hikari_str_get", &M);
@@ -212,14 +212,14 @@ static bool rewriteStrings(Module &M, uint64_t &S) {
     Value *Idx64 = B.CreateZExt(Idx, I64);
     Value *SrcP =
         B.CreateInBoundsGEP(BlobTy, BlobGV, {B.getInt64(0), Idx64});
-    Value *Src = B.CreateLoad(I8, SrcP, /*isVolatile=*/true);
+    Value *Src = B.CreateLoad(I8, SrcP, true);
     Value *Rot = B.CreateCall(
         Intrinsic::getDeclaration(&M, Intrinsic::fshr, {I8, I8, I8}),
         {Src, Src, B.getInt8(3)}); // rotr8(x,3) = fshr(x,x,3)
     Value *K8 = B.CreateTrunc(Key, I8);
     Value *Px = B.CreateXor(Rot, K8);
     Value *DstP = B.CreateInBoundsGEP(I8, Buf, {B.CreateZExt(I, I64)});
-    B.CreateStore(Px, DstP, /*isVolatile=*/true);
+    B.CreateStore(Px, DstP, true);
     Value *Next = B.CreateAdd(I, B.getInt32(1));
     B.CreateBr(Hdr);
     I->addIncoming(Next, Body);

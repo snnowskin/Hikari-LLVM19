@@ -30,7 +30,7 @@ static GlobalVariable *getCookieStack(Module &M) {
   auto *Ty = ArrayType::get(I64, kCookieCap);
   if (GlobalVariable *GV = M.getGlobalVariable("obf.fw.stack"))
     return GV;
-  auto *GV = new GlobalVariable(M, Ty, /*isConstant=*/false,
+  auto *GV = new GlobalVariable(M, Ty, false,
                                 GlobalValue::InternalLinkage,
                                 ConstantAggregateZero::get(Ty), "obf.fw.stack");
   GV->setThreadLocalMode(GlobalValue::GeneralDynamicTLSModel);
@@ -44,7 +44,7 @@ static GlobalVariable *getCookieSp(Module &M) {
   auto *I64 = Type::getInt64Ty(M.getContext());
   if (GlobalVariable *GV = M.getGlobalVariable("obf.fw.sp"))
     return GV;
-  auto *GV = new GlobalVariable(M, I64, /*isConstant=*/false,
+  auto *GV = new GlobalVariable(M, I64, false,
                                 GlobalValue::InternalLinkage,
                                 ConstantInt::get(I64, 0), "obf.fw.sp");
   GV->setThreadLocalMode(GlobalValue::GeneralDynamicTLSModel);
@@ -60,7 +60,7 @@ static GlobalVariable *getCalleeTable(Module &M, ArrayRef<Constant *> Items,
                                       StringRef Name) {
   auto *I64 = Type::getInt64Ty(M.getContext());
   auto *Ty = ArrayType::get(I64, Items.size());
-  auto *GV = new GlobalVariable(M, Ty, /*isConstant=*/false,
+  auto *GV = new GlobalVariable(M, Ty, false,
                                 GlobalValue::InternalLinkage,
                                 ConstantArray::get(Ty, Items), Name);
   GV->setSection(".data.obf");
@@ -115,21 +115,21 @@ static Function *buildWrapper(Module &M, Function &Callee, Function &Target,
     // 入口：压 cookie
   IRBuilder<> B(Entry);
   Value *SpP = B.CreateInBoundsGEP(I64, Sp, {B.getInt64(0)}, "obf.fw.spp");
-  Value *Depth = B.CreateLoad(I64, SpP, /*isVolatile=*/true, "obf.fw.d");
+  Value *Depth = B.CreateLoad(I64, SpP, true, "obf.fw.d");
   Value *Cookie = B.CreateXor(ConstantInt::get(I64, Key ^ (Seed * 2 + Layer)),
                               Depth);
   Value *Idx = B.CreateAnd(Depth, ConstantInt::get(I64, kCookieCap - 1),
                            "obf.fw.idx");
   Value *Slot = B.CreateInBoundsGEP(StackTy, Stack, {B.getInt64(0), Idx},
                                     "obf.fw.slot");
-  B.CreateStore(Cookie, Slot, /*isVolatile=*/true);
+  B.CreateStore(Cookie, Slot, true);
   Value *Depth1 = B.CreateAdd(Depth, ConstantInt::get(I64, 1), "obf.fw.d1");
-  B.CreateStore(Depth1, SpP, /*isVolatile=*/true);
+  B.CreateStore(Depth1, SpP, true);
 
     // 间接调用：从表里取指针
   Value *TabP = B.CreateInBoundsGEP(cast<ArrayType>(Tab->getValueType()), Tab,
                                     {B.getInt64(0), B.getInt64(0)});
-  Value *EncV = B.CreateLoad(I64, TabP, /*isVolatile=*/true, "obf.fw.enc");
+  Value *EncV = B.CreateLoad(I64, TabP, true, "obf.fw.enc");
   Value *Dec = B.CreateXor(EncV, ConstantInt::get(I64, Key), "obf.fw.dec");
   Value *FP = B.CreateIntToPtr(Dec, PointerType::getUnqual(C), "obf.fw.fp");
 
@@ -141,18 +141,18 @@ static Function *buildWrapper(Module &M, Function &Callee, Function &Target,
 
     // 弹栈校验
   Value *SpP2 = B.CreateInBoundsGEP(I64, Sp, {B.getInt64(0)});
-  Value *D2 = B.CreateLoad(I64, SpP2, /*isVolatile=*/true);
+  Value *D2 = B.CreateLoad(I64, SpP2, true);
   Value *D2m = B.CreateSub(D2, ConstantInt::get(I64, 1), "obf.fw.d2");
-  B.CreateStore(D2m, SpP2, /*isVolatile=*/true);
+  B.CreateStore(D2m, SpP2, true);
   Value *Idx2 = B.CreateAnd(D2m, ConstantInt::get(I64, kCookieCap - 1),
                             "obf.fw.idx2");
   Value *Slot2 = B.CreateInBoundsGEP(StackTy, Stack, {B.getInt64(0), Idx2});
-  Value *C2 = B.CreateLoad(I64, Slot2, /*isVolatile=*/true, "obf.fw.c2");
+  Value *C2 = B.CreateLoad(I64, Slot2, true, "obf.fw.c2");
   Value *Expect = B.CreateXor(ConstantInt::get(I64, Key ^ (Seed * 2 + Layer)),
                               D2m);
   Value *Bad = B.CreateICmpNE(C2, Expect, "obf.fw.bad");
   // 顺便把弹出来的槽擦掉，避免残留可被 dump 的 cookie 序列
-  B.CreateStore(ConstantInt::get(I64, 0), Slot2, /*isVolatile=*/true);
+  B.CreateStore(ConstantInt::get(I64, 0), Slot2, true);
   B.CreateCondBr(Bad, Trap, Ret);
 
     // 陷阱 / 返回

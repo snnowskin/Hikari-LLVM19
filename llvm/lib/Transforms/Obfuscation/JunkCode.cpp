@@ -103,7 +103,7 @@ static void insertFakeFrame(Function &F, BasicBlock *BB, uint64_t &S) {
   IRBuilder<> IB(BB->getFirstNonPHIOrDbgOrAlloca());
   Value *Slot = IB.CreateAlloca(I64, nullptr, "obf.ghost");
   StoreInst *St =
-      IB.CreateStore(ConstantInt::get(I64, splitmix64(S)), Slot, /*isVolatile=*/true);
+      IB.CreateStore(ConstantInt::get(I64, splitmix64(S)), Slot, true);
   // alloca 被 volatile store 碰过就不会被 SROA 提升；再补一条 sideeffect
   // 是双重保险（volatile 只挡优化器，不挡 SROA，见文档 §8.15）。
   emitSideEffect(M, St->getNextNode());

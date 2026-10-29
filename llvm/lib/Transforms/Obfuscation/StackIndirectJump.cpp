@@ -58,7 +58,7 @@ static GlobalVariable *makeTable(Module &M, ArrayRef<Constant *> Items,
                                  StringRef Name) {
   auto *I64 = Type::getInt64Ty(M.getContext());
   auto *Ty = ArrayType::get(I64, Items.size());
-  auto *GV = new GlobalVariable(M, Ty, /*isConstant=*/false,
+  auto *GV = new GlobalVariable(M, Ty, false,
                                 GlobalValue::InternalLinkage,
                                 ConstantArray::get(Ty, Items), Name);
   GV->setSection(".data.obf");
@@ -140,36 +140,36 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
   auto *StackTy = ArrayType::get(I64, kSMCap);
   Value *Stack = EB.CreateAlloca(StackTy, nullptr, "obf.sm.stk");
   Value *Sp = EB.CreateAlloca(I64, nullptr, "obf.sm.sp");
-  EB.CreateStore(ConstantInt::get(I64, 0), Sp, /*isVolatile=*/true);
+  EB.CreateStore(ConstantInt::get(I64, 0), Sp, true);
 
   // 把栈指针写进一个 volatile 全局槽：SROA / 内存提升看到「指针逃逸」就收手，
   // 否则整套栈会被提升成寄存器，L1 立刻退化成普通 switch（一点强度都没有）。
   GlobalVariable *Esc = M.getGlobalVariable("obf.sm.esc");
   if (!Esc) {
-    Esc = new GlobalVariable(M, PtrTy, /*isConstant=*/false,
+    Esc = new GlobalVariable(M, PtrTy, false,
                              GlobalValue::InternalLinkage,
                              ConstantPointerNull::get(PtrTy), "obf.sm.esc");
     Esc->setSection(".data.obf");
   }
-  EB.CreateStore(Stack, Esc, /*isVolatile=*/true);
+  EB.CreateStore(Stack, Esc, true);
 
     // 4. 分发器
   BasicBlock *Disp = BasicBlock::Create(C, "obf.sm.disp", &F);
   {
     IRBuilder<> DB(Disp);
     Value *SpP = DB.CreateInBoundsGEP(I64, Sp, {DB.getInt64(0)}, "obf.sm.spp");
-    Value *Cur = DB.CreateLoad(I64, SpP, /*isVolatile=*/true, "obf.sm.d");
+    Value *Cur = DB.CreateLoad(I64, SpP, true, "obf.sm.d");
 
     // 弹出 key
     Value *S1 = DB.CreateSub(Cur, ConstantInt::get(I64, 1));
     Value *Kp = DB.CreateInBoundsGEP(StackTy, Stack, {DB.getInt64(0), S1});
-    Value *Kc = DB.CreateLoad(I64, Kp, /*isVolatile=*/true, "obf.sm.kc");
+    Value *Kc = DB.CreateLoad(I64, Kp, true, "obf.sm.kc");
 
     // 弹出 slot
     Value *S2 = DB.CreateSub(S1, ConstantInt::get(I64, 1));
     Value *SlotP = DB.CreateInBoundsGEP(StackTy, Stack, {DB.getInt64(0), S2});
-    Value *Slot = DB.CreateLoad(I64, SlotP, /*isVolatile=*/true, "obf.sm.sl");
-    DB.CreateStore(S2, SpP, /*isVolatile=*/true);
+    Value *Slot = DB.CreateLoad(I64, SlotP, true, "obf.sm.sl");
+    DB.CreateStore(S2, SpP, true);
 
     // cell = (slot ^ kc) & MASK → p = perm[cell]
     Value *Cell = DB.CreateAnd(DB.CreateXor(Slot, Kc),
@@ -177,15 +177,15 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
     auto *PermTy = cast<ArrayType>(PermTab->getValueType());
     Value *PermP = DB.CreateInBoundsGEP(PermTy, PermTab,
                                         {DB.getInt64(0), Cell});
-    Value *P = DB.CreateLoad(I64, PermP, /*isVolatile=*/true, "obf.sm.p");
+    Value *P = DB.CreateLoad(I64, PermP, true, "obf.sm.p");
 
     // 地址 = tab[p] ^ bkey[p]
     auto *TabTy = cast<ArrayType>(AddrTab->getValueType());
     auto *BkTy = cast<ArrayType>(KeyTab->getValueType());
     Value *TabP = DB.CreateInBoundsGEP(TabTy, AddrTab, {DB.getInt64(0), P});
-    Value *Enc = DB.CreateLoad(I64, TabP, /*isVolatile=*/true, "obf.sm.e");
+    Value *Enc = DB.CreateLoad(I64, TabP, true, "obf.sm.e");
     Value *BkP = DB.CreateInBoundsGEP(BkTy, KeyTab, {DB.getInt64(0), P});
-    Value *Bk = DB.CreateLoad(I64, BkP, /*isVolatile=*/true, "obf.sm.bk");
+    Value *Bk = DB.CreateLoad(I64, BkP, true, "obf.sm.bk");
     Value *AddrV = DB.CreateXor(Enc, Bk, "obf.sm.addr");
     Value *Addr = DB.CreateIntToPtr(AddrV, PtrTy, "obf.sm.ap");
 
@@ -225,18 +225,18 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
 
     auto *KcTy = cast<ArrayType>(KTab->getValueType());
     Value *KcP = TB.CreateInBoundsGEP(KcTy, KTab, {TB.getInt64(0), CellV});
-    Value *Kcv = TB.CreateLoad(I64, KcP, /*isVolatile=*/true, "obf.sm.kv");
+    Value *Kcv = TB.CreateLoad(I64, KcP, true, "obf.sm.kv");
     Value *SlotV = TB.CreateXor(CellV, Kcv, "obf.sm.sv");
 
     Value *SpP = TB.CreateInBoundsGEP(I64, Sp, {TB.getInt64(0)});
-    Value *Cur = TB.CreateLoad(I64, SpP, /*isVolatile=*/true, "obf.sm.cur");
+    Value *Cur = TB.CreateLoad(I64, SpP, true, "obf.sm.cur");
     Value *P0P = TB.CreateInBoundsGEP(StackTy, Stack, {TB.getInt64(0), Cur});
-    TB.CreateStore(SlotV, P0P, /*isVolatile=*/true);
+    TB.CreateStore(SlotV, P0P, true);
     Value *S1 = TB.CreateAdd(Cur, ConstantInt::get(I64, 1));
     Value *P1P = TB.CreateInBoundsGEP(StackTy, Stack, {TB.getInt64(0), S1});
-    TB.CreateStore(Kcv, P1P, /*isVolatile=*/true);
+    TB.CreateStore(Kcv, P1P, true);
     Value *S2 = TB.CreateAdd(S1, ConstantInt::get(I64, 1));
-    TB.CreateStore(S2, SpP, /*isVolatile=*/true);
+    TB.CreateStore(S2, SpP, true);
 
     BranchInst::Create(Disp, T);
     T->eraseFromParent();
@@ -300,7 +300,7 @@ static bool emitCrossCallRelay(Function &F, uint64_t &S) {
 
   GlobalVariable *Rly = M.getGlobalVariable("obf.sm.rly");
   if (!Rly) {
-    Rly = new GlobalVariable(M, I64, /*isConstant=*/false,
+    Rly = new GlobalVariable(M, I64, false,
                              GlobalValue::InternalLinkage,
                              ConstantInt::get(I64, 0), "obf.sm.rly");
     Rly->setSection(".data.obf");
@@ -326,19 +326,19 @@ static bool emitCrossCallRelay(Function &F, uint64_t &S) {
 
     IRBuilder<> B(CI);
     Value *SpP = B.CreateInBoundsGEP(I64, Sp, {B.getInt64(0)});
-    Value *V = B.CreateLoad(I64, SpP, /*isVolatile=*/true, "obf.sm.rv");
+    Value *V = B.CreateLoad(I64, SpP, true, "obf.sm.rv");
     Value *E = B.CreateXor(V, ConstantInt::get(I64, K), "obf.sm.re");
     Value *RlyP = B.CreateInBoundsGEP(I64, Rly, {B.getInt64(0)});
-    B.CreateStore(E, RlyP, /*isVolatile=*/true);
+    B.CreateStore(E, RlyP, true);
 
     IRBuilder<> A(Next);
     // 注意：这里的 GEP 必须用 A 建（插在 call 之后），用 B 建会构成
     // 「先定义后支配」违规 —— IR 能过 verifier 的期望是 use 被 def 支配。
     Value *RlyP2 = A.CreateInBoundsGEP(I64, Rly, {A.getInt64(0)}, "obf.sm.rp");
-    Value *E2 = A.CreateLoad(I64, RlyP2, /*isVolatile=*/true, "obf.sm.r2");
+    Value *E2 = A.CreateLoad(I64, RlyP2, true, "obf.sm.r2");
     Value *V2 = A.CreateXor(E2, ConstantInt::get(I64, K), "obf.sm.r3");
     Value *SpP2 = A.CreateInBoundsGEP(I64, Sp, {A.getInt64(0)}, "obf.sm.sp2");
-    A.CreateStore(V2, SpP2, /*isVolatile=*/true);
+    A.CreateStore(V2, SpP2, true);
     Changed = true;
   }
   return Changed;
