@@ -280,6 +280,8 @@ PreservedAnalyses runFunctionWrapper(Module &M, ModuleAnalysisManager &) {
 
 } // namespace obf
 
+namespace obf {
 bool wrapRequested() {
   return WrapProb.getNumOccurrences() > 0;
 }
+} // namespace obf

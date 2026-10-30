@@ -396,6 +396,8 @@ PreservedAnalyses runConstantEncryption(Function &F, FunctionAnalysisManager &) 
 
 } // namespace obf
 
+namespace obf {
 bool ceRequested() {
   return CeProb.getNumOccurrences() > 0;
 }
+} // namespace obf
