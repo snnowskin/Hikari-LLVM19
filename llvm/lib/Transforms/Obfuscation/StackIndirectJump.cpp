@@ -53,6 +53,23 @@ static bool sjiEligible(const Function &F) {
   return true;
 }
 
+/// 建一个 ptr 数组全局（放 .data.obf）。
+/// B24：地址表不能再放 `ptrtoint(blockaddress) ^ key` —— 那是 xor 套重定位，
+/// AsmPrinter 只会加法重定位，落到静态初始化器就报
+/// `Unsupported expression in static initializer`。改成存裸 blockaddress
+/// 指针，xor 挪到运行期做。
+static GlobalVariable *makePtrTable(Module &M, ArrayRef<Constant *> Items,
+                                    StringRef Name) {
+  auto *PtrTy = PointerType::getUnqual(M.getContext());
+  auto *Ty = ArrayType::get(PtrTy, Items.size());
+  auto *GV = new GlobalVariable(M, Ty, false, GlobalValue::InternalLinkage,
+                                ConstantArray::get(Ty, Items), Name);
+  GV->setSection(".data.obf");
+  GV->setAlignment(Align(8));
+  GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
+  return GV;
+}
+
 /// 建一个 i64 数组全局（放 .data.obf，运行期可写但值必须与我们编码一致）。
 static GlobalVariable *makeTable(Module &M, ArrayRef<Constant *> Items,
                                  StringRef Name) {
@@ -120,14 +137,13 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
     KCell.push_back(ConstantInt::get(I64, splitmix64(S)));
 
   for (unsigned P = 0; P < N; ++P) {
-    Constant *Addr = ConstantExpr::getPtrToInt(BlockAddress::get(&F, Blocks[P]),
-                                               I64);
-    Tab.push_back(ConstantExpr::getXor(Addr, ConstantInt::get(I64, BlockKey[P])));
+    // 直接存 blockaddress 指针（合法静态初始化器），key 单独一张 i64 表
+    Tab.push_back(BlockAddress::get(&F, Blocks[P]));
     BKey.push_back(ConstantInt::get(I64, BlockKey[P]));
   }
 
   GlobalVariable *KTab = makeTable(M, KCell, "obf.sm.kc");
-  GlobalVariable *AddrTab = makeTable(M, Tab, "obf.sm.ad");
+  GlobalVariable *AddrTab = makePtrTable(M, Tab, "obf.sm.ad");
   GlobalVariable *KeyTab = makeTable(M, BKey, "obf.sm.bk");
   GlobalVariable *PermTab = makeTable(
       M,
@@ -187,7 +203,8 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
     auto *TabTy = cast<ArrayType>(AddrTab->getValueType());
     auto *BkTy = cast<ArrayType>(KeyTab->getValueType());
     Value *TabP = DB.CreateInBoundsGEP(TabTy, AddrTab, {DB.getInt64(0), P});
-    Value *Enc = DB.CreateLoad(I64, TabP, true, "obf.sm.e");
+    Value *EncP = DB.CreateLoad(PtrTy, TabP, true, "obf.sm.e");
+    Value *Enc = DB.CreatePtrToInt(EncP, I64, "obf.sm.ei");
     Value *BkP = DB.CreateInBoundsGEP(BkTy, KeyTab, {DB.getInt64(0), P});
     Value *Bk = DB.CreateLoad(I64, BkP, true, "obf.sm.bk");
     Value *AddrV = DB.CreateXor(Enc, Bk, "obf.sm.addr");
