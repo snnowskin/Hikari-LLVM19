@@ -230,12 +230,26 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
   GlobalVariable *Tab = getKeyTable(M, S);
   if (ObfDebug)
     errs() << "[ce]   keytable ok\n";
-  auto *ArrTy = cast<ArrayType>(Tab->getValueType());
+  // B21：ConstantArray 的 operand 不能走 getOperand() —— 那套透明访问器假定
+  // 操作数在 User 的 trailing storage 里，而 ConstantArray 用的是独立分配，
+  // release 版没有断言，读出来就是野指针（表现为 0xC0000005）。必须用
+  // getAggregateElement()，它同时兼容 ConstantArray / ConstantDataArray。
+  auto *ArrTy = dyn_cast<ArrayType>(Tab->getValueType());
+  if (!ArrTy)
+    return false;
+  Constant *Init = Tab->getInitializer();
+  if (!Init)
+    return false;
   unsigned K1i = static_cast<unsigned>(splitmix64(S) % kKeySlots);
   unsigned K2i = (K1i + 1 + static_cast<unsigned>(splitmix64(S) % 127)) % kKeySlots;
-  const auto *Arr = cast<ConstantArray>(Tab->getInitializer());
-  APInt K1Full = cast<ConstantInt>(Arr->getOperand(K1i))->getValue();
-  APInt K2Full = cast<ConstantInt>(Arr->getOperand(K2i))->getValue();
+  auto *K1CI = dyn_cast_or_null<ConstantInt>(Init->getAggregateElement(K1i));
+  auto *K2CI = dyn_cast_or_null<ConstantInt>(Init->getAggregateElement(K2i));
+  if (!K1CI || !K2CI)
+    return false;
+  APInt K1Full = K1CI->getValue();
+  APInt K2Full = K2CI->getValue();
+  if (ObfDebug)
+    errs() << "[ce]   keys " << K1i << "/" << K2i << " loaded\n";
 
   unsigned W = IntTy->getIntegerBitWidth();
   APInt K1 = K1Full.zextOrTrunc(W);
