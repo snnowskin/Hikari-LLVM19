@@ -6,14 +6,18 @@ on:
     paths:
       - 'llvm/lib/Transforms/Obfuscation/**'
       - '.github/workflows/build.yml'
+      - 'tests/**'
 
+# 构建与自检分开成两个 job：
+# 构建 job 只要编出来就算成功 → actions/cache 的 post 步骤才会真正存 ccache。
+# 之前因为「自检失败 = job 失败」，cache 从来没被保存过，每轮都得从头编 2.5 小时。
 concurrency:
   group: build-clang-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  linux:
-    name: clang (linux-x86_64)
+  linux-build:
+    name: build (linux-x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     steps:
@@ -51,48 +55,70 @@ jobs:
       - name: 编译
         run: ninja -C build clang -k 0
 
-      - name: 自检（混淆闸门）
-        run: |
-          CC=./build/bin/clang
-          $CC --version
-          FLAGS="-mllvm -hikari -mllvm -obf-level=3 -mllvm -obf-seed=0x51A9 \
-                 -mllvm -enable-strcry -mllvm -enable-cffobf -mllvm -enable-subobf \
-                 -mllvm -enable-indibran -mllvm -obf-junk-prob=100 \
-                 -mllvm -obf-bcf-prob=100 -mllvm -obf-ce-prob=100 \
-                 -mllvm -obf-wrap-prob=100 -mllvm -obf-sji=3 -mllvm -obf-sji-ratio=90"
-          # 1) 基线：明文必须在
-          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o /tmp/base.o
-          grep -aq OBF_PROBE_PLAINTEXT_9f3a /tmp/base.o && echo "OK 基线有明文"
-          # 2) L3 全开 + verifier：坏 IR 立刻失败（不给 codegen 崩的机会）
-          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o /tmp/obf.o $FLAGS \
-            -mllvm -obf-verify -mllvm -obf-dump-ir=/tmp/obf.ll
-          grep -aq OBF_PROBE_PLAINTEXT_9f3a /tmp/obf.o && { echo "FAIL 混淆后明文还在"; exit 1; }
-          echo "OK 明文已消失"
-          # 3) 结构核对：间接跳转存在、PHI/前驱一致
-          grep -aq 'indirectbr' /tmp/obf.ll && echo "OK 有 indirectbr"
-          python3 tests/check_ir.py /tmp/obf.ll
-
       - name: 打包
         run: |
-          mkdir -p out/bin out/lib
-          cp build/bin/clang build/bin/clang++ out/bin/ 2>/dev/null || true
-          cp -r build/lib/clang out/lib/ 2>/dev/null || true
-          tar -czf clang-linux-x86_64.tar.gz -C out .
+          mkdir -p x/bin x/lib
+          cp build/bin/clang x/bin/
+          cp -a build/lib/clang x/lib/
+          tar czf clang-linux-x86_64.tar.gz -C x .
+          ccache --show-stats || true
 
       - uses: actions/upload-artifact@v4
         with:
           name: clang-linux-x86_64
           path: clang-linux-x86_64.tar.gz
           retention-days: 14
-          compression-level: 0
 
-  windows:
-    name: clang.exe (windows-x86_64)
-    # 需要编 Windows 版时再打开：仓库变量 BUILD_WINDOWS=1
+  linux-gate:
+    name: gate (linux-x86_64)
+    needs: linux-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: clang-linux-x86_64
+
+      - name: 解包
+        run: |
+          mkdir -p x && tar xzf clang-linux-x86_64.tar.gz -C x
+          x/bin/clang --version
+
+      - name: 自检（混淆闸门）
+        run: |
+          set -euo pipefail
+          CC=$PWD/x/bin/clang
+          FLAGS="-mllvm -hikari -mllvm -obf-level=3 -mllvm -obf-seed=0x51A9 \
+                 -mllvm -enable-strcry -mllvm -enable-cffobf -mllvm -enable-subobf \
+                 -mllvm -enable-indibran -mllvm -obf-junk-prob=100 \
+                 -mllvm -obf-bcf-prob=100 -mllvm -obf-ce-prob=100 \
+                 -mllvm -obf-wrap-prob=100 -mllvm -obf-sji=3 -mllvm -obf-sji-ratio=90"
+
+          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o base.o
+          if ! grep -q OBF_PROBE_PLAINTEXT_9f3a base.o; then
+            echo "::error::基线里没有明文，探针坏了"; exit 1
+          fi
+
+          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o obf.o \
+              $FLAGS -mllvm -obf-verify -mllvm -obf-dump-ir=obf.ll
+
+          if grep -q OBF_PROBE_PLAINTEXT_9f3a obf.o; then
+            echo "::error::混淆后明文还在"; exit 1
+          fi
+          if ! grep -q indirectbr obf.ll; then
+            echo "::error::IR 里没有 indirectbr"; exit 1
+          fi
+          python3 tests/check_ir.py obf.ll
+
+  windows-build:
+    name: build (windows-x86_64)
     if: vars.BUILD_WINDOWS == '1'
     runs-on: windows-2022
-    timeout-minutes: 355
-    continue-on-error: true
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
         with:
@@ -122,31 +148,12 @@ jobs:
             -DLLVM_ENABLE_LIBXML2=OFF `
             -DLLVM_ENABLE_LIBEDIT=OFF `
             -DLLVM_ENABLE_CURL=OFF `
-            -DLLVM_PARALLEL_LINK_JOBS=1
+            -DLLVM_PARALLEL_LINK_JOBS=1 `
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: 编译
         run: cmake --build build --target clang -- -j 4 -k 0
-
-      - name: 自检（混淆闸门）
-        run: |
-          $cc = ".\build\bin\clang.exe"
-          & $cc --version
-          $flags = @('-mllvm','-hikari','-mllvm','-obf-level=3','-mllvm','-obf-seed=0x51A9',
-                     '-mllvm','-enable-strcry','-mllvm','-enable-cffobf','-mllvm','-enable-subobf',
-                     '-mllvm','-enable-indibran','-mllvm','-obf-junk-prob=100',
-                     '-mllvm','-obf-bcf-prob=100','-mllvm','-obf-ce-prob=100',
-                     '-mllvm','-obf-wrap-prob=100','-mllvm','-obf-sji=3','-mllvm','-obf-sji-ratio=90')
-          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o base.o
-          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M base.o >nul"
-          if ($LASTEXITCODE -ne 0) { throw "基线里没明文，探针坏了" }
-          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o obf.o @flags `
-            -mllvm -obf-verify -mllvm -obf-dump-ir=obf.ll
-          if ($LASTEXITCODE -ne 0) { throw "L3 全开编不过（看 verifier 输出）" }
-          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M obf.o >nul"
-          if ($LASTEXITCODE -eq 0) { throw "混淆后明文还在" }
-          cmd /c "findstr /C:indirectbr /M obf.ll >nul"
-          if ($LASTEXITCODE -ne 0) { throw "IR 里没有 indirectbr" }
-          python tests/check_ir.py obf.ll
 
       - name: 打包
         run: |
@@ -155,10 +162,50 @@ jobs:
           Copy-Item build\bin\clang++.exe out\bin\ -ErrorAction SilentlyContinue
           Copy-Item build\lib\clang out\lib\ -Recurse -ErrorAction SilentlyContinue
           Compress-Archive -Path out\* -DestinationPath clang-windows-x86_64.zip
+          ccache --show-stats
 
       - uses: actions/upload-artifact@v4
         with:
           name: clang-windows-x86_64
           path: clang-windows-x86_64.zip
           retention-days: 14
-          compression-level: 0
+
+  windows-gate:
+    name: gate (windows-x86_64)
+    needs: windows-build
+    if: vars.BUILD_WINDOWS == '1'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: clang-windows-x86_64
+
+      - name: 解包
+        run: |
+          Expand-Archive -Path clang-windows-x86_64.zip -DestinationPath x -Force
+          .\x\bin\clang.exe --version
+
+      - name: 自检（混淆闸门）
+        run: |
+          $cc = "$PWD\x\bin\clang.exe"
+          $flags = @('-mllvm','-hikari','-mllvm','-obf-level=3','-mllvm','-obf-seed=0x51A9',
+                     '-mllvm','-enable-strcry','-mllvm','-enable-cffobf','-mllvm','-enable-subobf',
+                     '-mllvm','-enable-indibran','-mllvm','-obf-junk-prob=100',
+                     '-mllvm','-obf-bcf-prob=100','-mllvm','-obf-ce-prob=100',
+                     '-mllvm','-obf-wrap-prob=100','-mllvm','-obf-sji=3','-mllvm','-obf-sji-ratio=90')
+          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o base.o
+          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M base.o >nul"
+          if ($LASTEXITCODE -ne 0) { throw "基线里没有明文，探针坏了" }
+          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o obf.o @flags `
+            -mllvm -obf-verify -mllvm -obf-dump-ir=obf.ll
+          if ($LASTEXITCODE -ne 0) { throw "L3 全开编不过（看 verifier 输出）" }
+          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M obf.o >nul"
+          if ($LASTEXITCODE -eq 0) { throw "混淆后明文还在" }
+          cmd /c "findstr /C:indirectbr /M obf.ll >nul"
+          if ($LASTEXITCODE -ne 0) { throw "IR 里没有 indirectbr" }
+          python tests/check_ir.py obf.ll
