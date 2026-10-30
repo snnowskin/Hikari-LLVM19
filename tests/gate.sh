@@ -76,7 +76,11 @@ for entry in "${FLAGSETS[@]}"; do
       else
         fail "$name seed=$seed $base"
         emit "-- FAIL $name seed=$seed $base"
-        tail -n 12 "$log" | sed 's/^/   /'
+        # 失败时用 -obf-debug 重跑一次，把 pass 内部的分步 trace 打出来
+        "$CC" --target=aarch64-linux-gnu -O2 -c "$src" -o /dev/null \
+          -mllvm -hikari $flags -mllvm -obf-seed=$seed -mllvm -obf-debug \
+          >"$OUT/dbg_${name}_${seed}_${base}.log" 2>&1 || true
+        tail -n 45 "$OUT/dbg_${name}_${seed}_${base}.log" | sed 's/^/   /'
       fi
     done
   done
@@ -109,7 +113,7 @@ else
          $hk $tflags -mllvm -obf-seed=0x51A9 -mllvm -obf-verify >"$log" 2>&1; then
       fail "rt $tier 链接"
       emit "-- FAIL rt $tier 链接"
-      tail -n 12 "$log" | sed 's/^/   /'
+      tail -n 45 "$log" | sed 's/^/   /'
       continue
     fi
     out=$("$QEMU" "$elf" 2>&1)

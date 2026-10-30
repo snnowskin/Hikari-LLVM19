@@ -213,6 +213,8 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
   Type *OrigTy = nullptr;
   if (!extractBits(C, Bits, IntTy, OrigTy))
     return false;
+  if (!IntTy)
+    return false;
   if (Bits.getBitWidth() == 0)
     return false;
 
@@ -220,7 +222,14 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
   LLVMContext &Ctx = M.getContext();
 
   // key 从表里取两份，用它们的常量值参与编码（运行期再 volatile 读回来）
+  if (ObfDebug)
+    errs() << "[ce] fn=" << I.getFunction()->getName() << " opc="
+           << I.getOpcodeName() << " op" << OpIdx << " cst=" << *C
+           << " ty=" << *IntTy << " W=" << IntTy->getIntegerBitWidth()
+           << "\n";
   GlobalVariable *Tab = getKeyTable(M, S);
+  if (ObfDebug)
+    errs() << "[ce]   keytable ok\n";
   auto *ArrTy = cast<ArrayType>(Tab->getValueType());
   unsigned K1i = static_cast<unsigned>(splitmix64(S) % kKeySlots);
   unsigned K2i = (K1i + 1 + static_cast<unsigned>(splitmix64(S) % 127)) % kKeySlots;
@@ -239,6 +248,8 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
     Rings = 1; // 编解码必须同时退化，否则链段数对不上
 
   APInt Enc = encodeBits(Bits, K1, K2, R, Rings);
+  if (ObfDebug)
+    errs() << "[ce]   encoded\n";
   (void)ArrTy;
 
   // 插入点：PHI 必须插在「前驱块末尾」，别的指令插在自己前面
@@ -251,9 +262,15 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
     if (!Pred)
       return false;
     B.SetInsertPoint(Pred->getTerminator());
+    if (ObfDebug)
+      errs() << "[ce]   phi insert point ok\n";
   }
 
+  if (ObfDebug)
+    errs() << "[ce]   building chain\n";
   Value *Dec = emitDecodeChain(M, B, IntTy, Enc, K1i, K2i, R, Rings);
+  if (ObfDebug)
+    errs() << "[ce]   chain ok\n";
   if (OrigTy != IntTy) {
     if (OrigTy->isVectorTy() || OrigTy->isFloatingPointTy())
       Dec = B.CreateBitCast(Dec, OrigTy, "obf.ce.bc");
@@ -261,7 +278,11 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
       return false;
   }
 
+  if (ObfDebug)
+    errs() << "[ce]   setOperand\n";
   I.setOperand(OpIdx, Dec);
+  if (ObfDebug)
+    errs() << "[ce]   done\n";
   (void)Ctx;
   return true;
 }

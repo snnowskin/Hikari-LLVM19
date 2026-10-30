@@ -44,6 +44,7 @@ extern llvm::cl::opt<int>      SjiRatio;
 // -mllvm -obf-dump-ir=<p> 混淆后把模块 IR 写到文件，配 check_ir.py 静态核对
 extern llvm::cl::opt<bool>        ObfVerify;
 extern llvm::cl::opt<std::string> ObfDumpIR;
+extern llvm::cl::opt<bool>        ObfDebug;
 
 // ── 种子派生 ──
 /// splitmix64：小、快、分布够。禁止用来做密码学，这里只是打散。

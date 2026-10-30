@@ -21,7 +21,7 @@ static long sc(long n, long a, long b, long c) {
   return x0;
 }
 
-static void wr(const char *s, u64 n) { sc(64, (long)s, (long)n, 0); }
+static void wr(const char *s, u64 n) { sc(64, 1, (long)s, (long)n); }
 static void ex(int code) __attribute__((noreturn));
 static void ex(int code) {
   sc(94, code, 0, 0);

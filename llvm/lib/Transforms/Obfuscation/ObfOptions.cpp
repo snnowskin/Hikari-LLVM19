@@ -26,4 +26,9 @@ llvm::cl::opt<std::string> ObfDumpIR(
     llvm::cl::desc("混淆后把模块 IR 写到该文件（默认空=不写）"),
     llvm::cl::init(""));
 
+llvm::cl::opt<bool> ObfDebug(
+    "obf-debug",
+    llvm::cl::desc("打印混淆过程的关键步骤（排查崩溃用）"),
+    llvm::cl::init(false));
+
 } // namespace obf
