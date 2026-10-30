@@ -53,12 +53,13 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: 编译
-        run: ninja -C build clang -k 0
+        run: ninja -C build clang lld -k 0
 
       - name: 打包
         run: |
           mkdir -p x/bin x/lib
           cp build/bin/clang x/bin/
+          cp build/bin/ld.lld x/bin/ || cp build/bin/lld x/bin/ || true
           cp -a build/lib/clang x/lib/
           tar czf clang-linux-x86_64.tar.gz -C x .
           ccache --show-stats || true
@@ -83,36 +84,25 @@ jobs:
         with:
           name: clang-linux-x86_64
 
+      - name: 工具（qemu 用于运行期正确性）
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static python3
+
       - name: 解包
         run: |
           mkdir -p x && tar xzf clang-linux-x86_64.tar.gz -C x
           x/bin/clang --version
 
-      - name: 自检（混淆闸门）
+      - name: 自检（混淆闸门 · 全组合矩阵）
         run: |
-          set -euo pipefail
-          CC=$PWD/x/bin/clang
-          FLAGS="-mllvm -hikari -mllvm -obf-level=3 -mllvm -obf-seed=0x51A9 \
-                 -mllvm -enable-strcry -mllvm -enable-cffobf -mllvm -enable-subobf \
-                 -mllvm -enable-indibran -mllvm -obf-junk-prob=100 \
-                 -mllvm -obf-bcf-prob=100 -mllvm -obf-ce-prob=100 \
-                 -mllvm -obf-wrap-prob=100 -mllvm -obf-sji=3 -mllvm -obf-sji-ratio=90"
+          set -uo pipefail
+          bash tests/gate.sh "$PWD/x/bin/clang" "$PWD/.gate"
 
-          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o base.o
-          if ! grep -q OBF_PROBE_PLAINTEXT_9f3a base.o; then
-            echo "::error::基线里没有明文，探针坏了"; exit 1
-          fi
-
-          $CC --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o obf.o \
-              $FLAGS -mllvm -obf-verify -mllvm -obf-dump-ir=obf.ll
-
-          if grep -q OBF_PROBE_PLAINTEXT_9f3a obf.o; then
-            echo "::error::混淆后明文还在"; exit 1
-          fi
-          if ! grep -q indirectbr obf.ll; then
-            echo "::error::IR 里没有 indirectbr"; exit 1
-          fi
-          python3 tests/check_ir.py obf.ll
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gate-logs-linux
+          path: .gate/*.log
+          retention-days: 7
 
   windows-build:
     name: build (windows-x86_64)
@@ -153,13 +143,14 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: 编译
-        run: cmake --build build --target clang -- -j 4 -k 0
+        run: cmake --build build --target clang lld -- -j 4 -k 0
 
       - name: 打包
         run: |
           New-Item -ItemType Directory -Force out\bin, out\lib | Out-Null
           Copy-Item build\bin\clang.exe out\bin\
           Copy-Item build\bin\clang++.exe out\bin\ -ErrorAction SilentlyContinue
+          Copy-Item build\bin\ld.lld.exe out\bin\ -ErrorAction SilentlyContinue
           Copy-Item build\lib\clang out\lib\ -Recurse -ErrorAction SilentlyContinue
           Compress-Archive -Path out\* -DestinationPath clang-windows-x86_64.zip
           ccache --show-stats
@@ -190,22 +181,15 @@ jobs:
           Expand-Archive -Path clang-windows-x86_64.zip -DestinationPath x -Force
           .\x\bin\clang.exe --version
 
-      - name: 自检（混淆闸门）
+      - name: 自检（混淆闸门 · 全组合矩阵）
+        shell: bash
         run: |
-          $cc = "$PWD\x\bin\clang.exe"
-          $flags = @('-mllvm','-hikari','-mllvm','-obf-level=3','-mllvm','-obf-seed=0x51A9',
-                     '-mllvm','-enable-strcry','-mllvm','-enable-cffobf','-mllvm','-enable-subobf',
-                     '-mllvm','-enable-indibran','-mllvm','-obf-junk-prob=100',
-                     '-mllvm','-obf-bcf-prob=100','-mllvm','-obf-ce-prob=100',
-                     '-mllvm','-obf-wrap-prob=100','-mllvm','-obf-sji=3','-mllvm','-obf-sji-ratio=90')
-          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o base.o
-          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M base.o >nul"
-          if ($LASTEXITCODE -ne 0) { throw "基线里没有明文，探针坏了" }
-          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o obf.o @flags `
-            -mllvm -obf-verify -mllvm -obf-dump-ir=obf.ll
-          if ($LASTEXITCODE -ne 0) { throw "L3 全开编不过（看 verifier 输出）" }
-          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M obf.o >nul"
-          if ($LASTEXITCODE -eq 0) { throw "混淆后明文还在" }
-          cmd /c "findstr /C:indirectbr /M obf.ll >nul"
-          if ($LASTEXITCODE -ne 0) { throw "IR 里没有 indirectbr" }
-          python tests/check_ir.py obf.ll
+          set -uo pipefail
+          bash tests/gate.sh "$PWD/x/bin/clang.exe" "$PWD/.gate"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gate-logs-windows
+          path: .gate/*.log
+          retention-days: 7

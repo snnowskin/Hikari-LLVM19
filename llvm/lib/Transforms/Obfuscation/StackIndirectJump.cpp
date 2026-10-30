@@ -255,37 +255,40 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
   return Changed;
 }
 
-// ── L2 / L3：ret-sled 借 LR 回跳 ──
-static bool emitRetSled(BasicBlock *BB, BasicBlock *Target, bool UseTLS) {
+// ── L2 / L3：ret-sled —— 借 LR 回跳 ──
+//  把「块尾唯一后继」换成一段内联汇编：目标地址写进 x30，再用 ret 跳过去。
+//  反汇编里看到的是 ret，静态分析很难把它与真正的函数返回区分开。
+//  两条硬约束：
+//    - 目标块不能有 PHI（这条边在 IR 上消失了，PHI 入边没法对上）—— B18；
+//    - 栈进出严格配平，x29 必须原样恢复，x30 只用来放目标 —— B14。
+static bool emitRetSled(BasicBlock *BB, BasicBlock *Target) {
   Function *F = BB->getParent();
   Module &M = *F->getParent();
   LLVMContext &C = M.getContext();
-  auto *I64 = Type::getInt64Ty(C);
   auto *P0 = PointerType::getUnqual(C);
 
   Instruction *Term = BB->getTerminator();
   if (!Term || Term->getNumSuccessors() != 1)
     return false;
+  if (!Target->phis().empty())
+    return false; // B18
 
   Constant *Tgt = BlockAddress::get(F, Target);
 
-  FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {P0, I64}, false);
-  const char *AsmText =
-      UseTLS ? "mrs $2, tpidr_el0\n\t"
-               "str $0, [$2, $1]\n\t"
-               "ldr x30, [$2, $1]\n\t"
-               "ret"
-             : "sub sp, sp, #16\n\t"
-               "str $0, [sp]\n\t"
-               "ldp x29, x30, [sp], #16\n\t"
-               "ret";
+  // sub sp,#16 → 存 [x29, x30] → 目标写进 x30 槽 → 只弹回 x29（sp 一起抬回）
+  // → ret 用 x30 里的目标地址返回。5 条指令，栈严格配平。
+  const char *AsmText = "sub sp, sp, #16\n\t"
+                        "stp x29, x30, [sp]\n\t"
+                        "str $0, [sp, #8]\n\t"
+                        "ldr x29, [sp], #16\n\t"
+                        "ret";
 
-  InlineAsm *IA = makeAsm(M, FT, AsmText, "r,r,r,~{x29},~{x30},~{memory}",
+  FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {P0}, false);
+  InlineAsm *IA = makeAsm(M, FT, AsmText, "r,~{x29},~{x30},~{memory}",
                           /*HasSideEffects=*/true);
 
   IRBuilder<> B(Term);
-  Value *Off = ConstantInt::get(I64, UseTLS ? 0x08 : 0x00);
-  SmallVector<Value *, 2> AsmArgs{Tgt, Off};
+  SmallVector<Value *, 1> AsmArgs{Tgt};
   B.CreateCall(FT, IA, AsmArgs, "");
   B.CreateUnreachable();
   Term->eraseFromParent();
@@ -383,8 +386,6 @@ bool processStackIndirectJump(Function &F) {
 
   // L2/L3：ret-sled。必须重跑块遍历（L1 已把所有终结符换成 br disp）
   if (SjiLevel >= 2) {
-    bool UseTLS = (SjiLevel >= 3) && (splitmix64(S) % 2 == 0);
-
     SmallVector<BasicBlock *, 128> Blocks;
     for (BasicBlock &BB : F)
       if (!BB.isEHPad())
@@ -398,7 +399,7 @@ bool processStackIndirectJump(Function &F) {
         continue;
       if (splitmix64(S) % 4 != 0) // 全做体积极速膨胀
         continue;
-      if (emitRetSled(BB, T->getSuccessor(0), UseTLS))
+      if (emitRetSled(BB, T->getSuccessor(0)))
         Changed = true;
     }
   }

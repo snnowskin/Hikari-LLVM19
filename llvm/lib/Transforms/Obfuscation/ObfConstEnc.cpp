@@ -244,7 +244,10 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
   // 插入点：PHI 必须插在「前驱块末尾」，别的指令插在自己前面
   IRBuilder<> B(&I);
   if (auto *Phi = dyn_cast<PHINode>(&I)) {
-    BasicBlock *Pred = Phi->getIncomingBlock(OpIdx);
+    // B15：PHI 的 operand 排布是 [v0,b0,v1,b1,…]，OpIdx 是原始 operand 下标，
+    // getIncomingBlock() 要的是入边序号（= OpIdx/2）。直接用 OpIdx 会读到
+    // 无关块 / 越界，译码链被插进不支配它的块 → verifier 崩或静默错值。
+    BasicBlock *Pred = Phi->getIncomingBlock(OpIdx / 2);
     if (!Pred)
       return false;
     B.SetInsertPoint(Pred->getTerminator());
@@ -265,6 +268,9 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
 
 // ── 资格判定 ──
 static bool opIndexForbidden(const Instruction &I, unsigned OpIdx) {
+  // PHI 的奇数下标是基本块操作数，不能换成运行期值
+  if (isa<PHINode>(I) && (OpIdx & 1))
+    return true;
   // inline asm：全部参数跳过（"i" 约束要立即数）
   if (const auto *CB = dyn_cast<CallBase>(&I))
     if (isa<InlineAsm>(CB->getCalledOperand()))

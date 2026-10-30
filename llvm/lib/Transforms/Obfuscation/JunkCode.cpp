@@ -29,12 +29,15 @@ static InlineAsm *makeIslandAsm(Module &M, ArrayRef<uint32_t> Words) {
   LLVMContext &C = M.getContext();
   std::string Asm;
   raw_string_ostream OS(Asm);
+  // 先跳过数据：万一优化器把守卫折叠成必定进岛，也不会顺序执行 .word 垃圾
+  OS << "b 1f\n";
   OS << ".p2align 2\n";
   for (uint32_t W : Words) {
     OS << ".word 0x";
     OS.write_hex(W);
     OS << "\n";
   }
+  OS << "1:\n";
   OS.flush();
 
   FunctionType *FT = FunctionType::get(Type::getVoidTy(C), false);

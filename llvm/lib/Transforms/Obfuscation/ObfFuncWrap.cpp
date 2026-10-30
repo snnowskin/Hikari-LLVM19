@@ -94,6 +94,9 @@ static Function *buildWrapper(Module &M, Function &Callee, Function &Target,
   Function *W = Function::Create(Callee.getFunctionType(),
                                  GlobalValue::InternalLinkage, Name, &M);
   W->setAttributes(Callee.getAttributes());
+  // B16：callee 若是 alwaysinline（clang 给 static inline 常加），wrapper 会同时
+  // 带 alwaysinline + noinline → Verifier 报 incompatible，必须先去再置。
+  W->removeFnAttr(Attribute::AlwaysInline);
   W->addFnAttr(Attribute::NoInline);
   W->setCallingConv(Callee.getCallingConv());
 
@@ -150,7 +153,13 @@ static Function *buildWrapper(Module &M, Function &Callee, Function &Target,
   Value *C2 = B.CreateLoad(I64, Slot2, true, "obf.fw.c2");
   Value *Expect = B.CreateXor(ConstantInt::get(I64, Key ^ (Seed * 2 + Layer)),
                               D2m);
-  Value *Bad = B.CreateICmpNE(C2, Expect, "obf.fw.bad");
+  // B17：递归深度超过 kCookieCap 时环会覆盖，比对必然失败 —— 那种情况放弃
+  // 校验（而不是 brk 自杀），否则 256 层以上的正常递归会被误杀。
+  Value *Overflow = B.CreateICmpUGE(D2m, ConstantInt::get(I64, kCookieCap),
+                                    "obf.fw.of");
+  Value *Bad = B.CreateAnd(
+      B.CreateICmpNE(C2, Expect, "obf.fw.ne"), B.CreateNot(Overflow),
+      "obf.fw.bad");
   // 顺便把弹出来的槽擦掉，避免残留可被 dump 的 cookie 序列
   B.CreateStore(ConstantInt::get(I64, 0), Slot2, true);
   B.CreateCondBr(Bad, Trap, Ret);

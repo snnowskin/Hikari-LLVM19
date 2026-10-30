@@ -210,10 +210,12 @@ struct Obfuscation : public ModulePass {
                                                EnableIndirectBranching);
     for (Function &F : M)
       if (!F.isDeclaration()) {
-        P->runOnFunction(F);
-        // [OLLVM 魔改 §4.5] 堆栈式间接跳转：必须最后跑，它一跑 CFG 就没了
-        // 档位判定在 processStackIndirectJump 内部自己做（ObfLevel/SjiLevel）
+        // [OLLVM 魔改 §4.5] 堆栈式间接跳转：必须跑在 IndirectBranch 之前 ——
+        // 上游 IndirectBranch 会把 br 全换成 indirectbr，而 SJI 明确跳过
+        // indirectbr 终结符（它自己就是一层栈机，不该被二次改写）。顺序反了
+        // SJI 的覆盖率会掉到接近 0（B19）。档位判定在 processStackIndirectJump 内部。
         obf::processStackIndirectJump(F);
+        P->runOnFunction(F);
       }
     delete P;
     // [OLLVM 魔改 §4.6] 函数包装：上游那份自标 // Broken（改 LR 再 ret 会无限递归），
