@@ -33,7 +33,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-linux-${{ hashFiles('llvm/lib/Transforms/Obfuscation/**') }}
+          key: ccache-linux-${{ github.run_id }}
           restore-keys: ccache-linux-
 
       - name: 配置
@@ -53,13 +53,12 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: 编译
-        run: ninja -C build clang lld -k 0
+        run: ninja -C build clang -k 0
 
       - name: 打包
         run: |
           mkdir -p x/bin x/lib
           cp build/bin/clang x/bin/
-          cp build/bin/ld.lld x/bin/ || cp build/bin/lld x/bin/ || true
           cp -a build/lib/clang x/lib/
           tar czf clang-linux-x86_64.tar.gz -C x .
           ccache --show-stats || true
@@ -85,7 +84,7 @@ jobs:
           name: clang-linux-x86_64
 
       - name: 工具（qemu 用于运行期正确性）
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static python3
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static python3 lld
 
       - name: 解包
         run: |
@@ -122,7 +121,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: C:\Users\runneradmin\AppData\Local\ccache
-          key: ccache-win-${{ hashFiles('llvm/lib/Transforms/Obfuscation/**') }}
+          key: ccache-win-${{ github.run_id }}
           restore-keys: ccache-win-
 
       - name: 配置
@@ -143,7 +142,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: 编译
-        run: cmake --build build --target clang lld -- -j 4 -k 0
+        run: cmake --build build --target clang -- -j 4 -k 0
 
       - name: 打包
         run: |
