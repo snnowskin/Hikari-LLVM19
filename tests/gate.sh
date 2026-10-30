@@ -74,10 +74,12 @@ for entry in "${FLAGSETS[@]}"; do
            >"$log" 2>&1; then
         # 效果断言：编译过不等于 pass 真的动过手。-obf-level=0 时单给
         # -obf-junk-prob=100 什么都不做，闸门却报 pass —— 那是空跑假绿。
+        # SJI 只断言 rt_probe：magic.c 函数块数 <8，buildStackMachine 按
+        # 设计跳过（跳过的组合不算通过，只是没有可断言的对象）。
         mk=""
         case $name in
           junk)          mk='udf|\.word' ;;
-          sji1|sji2|sji3) mk='indirectbr' ;;
+          sji1|sji2|sji3) [ "$base" = rt_probe ] && mk='indirectbr' ;;
           strcry)        mk='obf_str_blob' ;;
           ce)            mk='obf\.ce\.keys' ;;
           wrap)          mk='obf_ww_' ;;
@@ -87,7 +89,7 @@ for entry in "${FLAGSETS[@]}"; do
           "$CC" --target=aarch64-linux-gnu -O2 -S -emit-llvm "$src" \
             -o "$OUT/${name}_${seed}_${base}.ll" \
             -mllvm -hikari $flags -mllvm -obf-seed=$seed >>"$log" 2>&1
-          if ! grep -q "$mk" "$OUT/${name}_${seed}_${base}.ll" 2>/dev/null; then
+          if ! grep -qE "$mk" "$OUT/${name}_${seed}_${base}.ll" 2>/dev/null; then
             fail "$name seed=$seed $base (无效果)"
             emit "-- FAIL $name seed=$seed $base：IR 里找不到混淆痕迹（$mk）"
             continue
