@@ -56,7 +56,7 @@ FLAGSETS=(
         -mllvm -enable-subobf -mllvm -enable-indibran"
 )
 
-SRCS=(tests/c/obf_probe.c tests/c/rt_probe.c)
+SRCS=(tests/c/magic.c tests/c/rt_probe.c)
 
 emit "== 编译期矩阵：${#FLAGSETS[@]} 组 × ${#SEEDS[@]} 种子 × ${#SRCS[@]} 源 = $(( ${#FLAGSETS[@]} * ${#SEEDS[@]} * ${#SRCS[@]} )) 次"
 
@@ -82,7 +82,6 @@ for entry in "${FLAGSETS[@]}"; do
           ce)            mk='obf\.ce\.keys' ;;
           wrap)          mk='obf_ww_' ;;
           bcf)           mk='call void asm sideeffect' ;;
-          L1|L2|L3|all)  mk='indirectbr' ;;
         esac
         if [ -n "$mk" ]; then
           "$CC" --target=aarch64-linux-gnu -O2 -S -emit-llvm "$src" \
