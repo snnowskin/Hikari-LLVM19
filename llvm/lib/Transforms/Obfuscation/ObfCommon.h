@@ -46,13 +46,13 @@ inline bool rebuildPhiIncoming(llvm::Function &F) {
     for (llvm::PHINode &PN : BB.phis()) {
       const unsigned Old = PN.getNumIncomingValues();
       llvm::SmallVector<llvm::Value *, 16> Vals;
-      llvm::SmallVector<bool, 16> Used(Old, false);
+      llvm::SmallVector<char, 16> Used(Old, 0);
       for (llvm::BasicBlock *P : Preds) {
         llvm::Value *V = nullptr;
         for (unsigned I = 0; I < Old; ++I)
           if (!Used[I] && PN.getIncomingBlock(I) == P) {
             V = PN.getIncomingValue(I);
-            Used[I] = true;
+            Used[I] = 1;
             break;
           }
         if (!V)
@@ -71,8 +71,9 @@ inline bool rebuildPhiIncoming(llvm::Function &F) {
       if (Same)
         continue;
 
+      unsigned Zero = 0;   // 显式变量：字面量 0 在 unsigned/BasicBlock* 两个重载间二义
       while (PN.getNumIncomingValues())
-        PN.removeIncomingValue(0, /*Delete=*/false);
+        PN.removeIncomingValue(Zero, /*Delete=*/false);
       for (unsigned I = 0; I < Preds.size(); ++I)
         PN.addIncoming(Vals[I], Preds[I]);
       Changed = true;
