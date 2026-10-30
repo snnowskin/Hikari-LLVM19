@@ -129,7 +129,10 @@ static void insertFakeFrame(Function &F, BasicBlock *BB, uint64_t &S) {
 }
 
 bool processJunkCode(Function &F) {
-  if (ObfLevel == 0 || JunkProb == 0)
+  // 显式给了 -obf-junk-prob 就照办，不看档位
+  if (JunkProb.getNumOccurrences() == 0 && ObfLevel == 0)
+    return false;
+  if (JunkProb == 0)
     return false;
   if (F.isDeclaration() || isNoObf(F))
     return false;
@@ -147,7 +150,7 @@ bool processJunkCode(Function &F) {
 
   bool Changed = false;
   for (BasicBlock *BB : Blocks) {
-    if (!rollChance(S, levelScale(JunkProb)))
+    if (!rollChance(S, probOf(JunkProb, 70)))
       continue;
 
     switch (splitmix64(S) % 3) {

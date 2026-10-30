@@ -341,7 +341,7 @@ static bool opIndexForbidden(const Instruction &I, unsigned OpIdx) {
 }
 
 bool processConstantEncryption(Function &F) {
-  if (ObfLevel == 0)
+  if (ObfLevel == 0 && CeProb.getNumOccurrences() == 0)
     return false;
   if (F.isDeclaration() || F.empty())
     return false;
@@ -349,7 +349,7 @@ bool processConstantEncryption(Function &F) {
       F.getName().starts_with("obf."))
     return false; // 自家运行时不做，避免把译码链自己加密一遍（会指数膨胀）
 
-  int P = levelScale(CeProb.getValue());
+  int P = probOf(CeProb, 60);
   if (P <= 0)
     return false;
 

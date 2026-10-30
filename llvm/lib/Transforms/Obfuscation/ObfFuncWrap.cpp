@@ -202,10 +202,10 @@ static bool wrapEligible(const Function &F) {
 
 // ── pass 入口（Module 级：需要跨函数改调用点） ──
 bool processFunctionWrapper(Module &M) {
-  if (ObfLevel == 0)
+  if (ObfLevel == 0 && WrapProb.getNumOccurrences() == 0)
     return false;
 
-  int P = levelScale(WrapProb.getValue());
+  int P = probOf(WrapProb, 40);
   if (P <= 0)
     return false;
 

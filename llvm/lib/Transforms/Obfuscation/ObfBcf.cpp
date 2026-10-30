@@ -206,12 +206,12 @@ static bool isBcfTarget(const BasicBlock &BB) {
 
 // ── pass 入口 ──
 bool processBogusControlFlow(Function &F) {
-  if (ObfLevel == 0)
+  if (ObfLevel == 0 && BcfProb.getNumOccurrences() == 0)
     return false;
   if (!bcfEligible(F))
     return false;
 
-  int P = levelScale(BcfProb.getValue());
+  int P = probOf(BcfProb, 60);
   if (P <= 0)
     return false;
 

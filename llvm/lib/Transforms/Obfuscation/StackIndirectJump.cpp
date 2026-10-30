@@ -375,7 +375,11 @@ static bool emitCrossCallRelay(Function &F, uint64_t &S) {
 
 // ── pass 入口 ──
 bool processStackIndirectJump(Function &F) {
-  if (ObfLevel == 0 || SjiLevel == 0)
+  // 显式给了 -obf-sji 就照办；没给则跟随档位（L2→2 层，L3→3 层）
+  int SjiLv = SjiLevel.getNumOccurrences()
+                  ? static_cast<int>(SjiLevel)
+                  : (ObfLevel >= 2 ? static_cast<int>(ObfLevel) : 0);
+  if (SjiLv <= 0)
     return false;
   if (!sjiEligible(F) || F.empty())
     return false;
@@ -387,7 +391,7 @@ bool processStackIndirectJump(Function &F) {
   bool Changed = false;
 
   // L1：先把 PHI 降级（否则栈化后 PHI 入边全错），再栈化
-  if (SjiLevel >= 1) {
+  if (SjiLv >= 1) {
     SmallVector<PHINode *, 32> Phis;
     for (BasicBlock &BB : F)
       for (Instruction &I : BB)
@@ -402,7 +406,7 @@ bool processStackIndirectJump(Function &F) {
   }
 
   // L2/L3：ret-sled。必须重跑块遍历（L1 已把所有终结符换成 br disp）
-  if (SjiLevel >= 2) {
+  if (SjiLv >= 2) {
     SmallVector<BasicBlock *, 128> Blocks;
     for (BasicBlock &BB : F)
       if (!BB.isEHPad())
@@ -422,7 +426,7 @@ bool processStackIndirectJump(Function &F) {
   }
 
   // L4：跨调用接力
-  if (SjiLevel >= 4)
+  if (SjiLv >= 4)
     if (emitCrossCallRelay(F, S))
       Changed = true;
 

@@ -184,6 +184,15 @@ inline int levelScale(int BaseProb) {
   }
 }
 
+/// 显式给过 flag 就照办，否则用档位缩放后的默认值。
+/// 老写法是「ObfLevel==0 直接 return false」，于是单独给 -obf-junk-prob=100
+/// 什么都不会发生 —— 用户以为花指令开了，其实一条都没插。
+template <typename OptT> inline int probOf(OptT &O, int BaseProb) {
+  if (O.getNumOccurrences() > 0)
+    return static_cast<int>(O.getValue());
+  return levelScale(BaseProb);
+}
+
 /// 用「种子 + 计数器」现算随机数，不引入全局可变状态（避免并行 backend race）。
 inline bool rollChance(uint64_t &S, int Percent) {
   if (Percent >= 100) return true;

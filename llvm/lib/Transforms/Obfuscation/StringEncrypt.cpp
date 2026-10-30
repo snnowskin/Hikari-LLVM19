@@ -258,9 +258,8 @@ static bool rewriteStrings(Module &M, uint64_t &S) {
 
 // ── pass 入口 ──
 bool processStringEncrypt(Module &M) {
-  if (ObfLevel == 0)
-    return false;
-
+  // 调用点已经用 -enable-strcry / -enable-allobf 判过，这里不再看档位，
+  // 否则单独给 -enable-strcry 等于什么都没做（闸门里那四组是空跑）。
   uint64_t S = ObfSeed;
   S = fnv1a(M.getModuleIdentifier(), S);
 
