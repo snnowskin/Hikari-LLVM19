@@ -8,6 +8,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -27,36 +28,56 @@
 
 namespace obf {
 
-// ── PHI 入边去重：同一前驱块出现多条入边是非法的 ──
-// 我们的 pass 都是「改边」而不是「重建块」，改动后可能出现
-// br %c, %J, %J 这种双边上同一目标，PHI 于是拿到两条同块入边。
-// 语义上两条边来自同一块、值必然相同，保留第一条即可。
-inline bool dedupePhiIncoming(llvm::Function &F) {
+// ── PHI 归一化：按真实前驱边重建入边表 ──
+// 我们的 pass 都是「改边」，改完可能出现
+//   · 同一块有两个入口边，PHI 只有一条入边   → verifier 报入边不足
+//   · 块有两条入边，PHI 有两条同块入边        → verifier 报 multiple entries
+// 这里统一按前驱边（含重复边）重建，值按原顺序逐条对应，
+// 找不到对应值的边填 undef（这种边原本就不可达）。
+inline bool rebuildPhiIncoming(llvm::Function &F) {
   bool Changed = false;
-  for (llvm::BasicBlock &BB : F)
+  for (llvm::BasicBlock &BB : F) {
+    if (BB.phis().empty())
+      continue;
+    llvm::SmallVector<llvm::BasicBlock *, 16> Preds;
+    for (llvm::BasicBlock *P : llvm::predecessors(&BB))
+      Preds.push_back(P);
+
     for (llvm::PHINode &PN : BB.phis()) {
-      llvm::SmallVector<llvm::BasicBlock *, 8> Seen;
-      for (unsigned I = 0, N = PN.getNumIncomingValues(); I < N; ++I) {
-        llvm::BasicBlock *In = PN.getIncomingBlock(I);
-        bool Dup = false;
-        for (llvm::BasicBlock *S : Seen)
-          if (S == In) {
-            Dup = true;
+      const unsigned Old = PN.getNumIncomingValues();
+      llvm::SmallVector<llvm::Value *, 16> Vals;
+      llvm::SmallVector<bool, 16> Used(Old, false);
+      for (llvm::BasicBlock *P : Preds) {
+        llvm::Value *V = nullptr;
+        for (unsigned I = 0; I < Old; ++I)
+          if (!Used[I] && PN.getIncomingBlock(I) == P) {
+            V = PN.getIncomingValue(I);
+            Used[I] = true;
             break;
           }
-        if (!Dup) {
-          Seen.push_back(In);
-          continue;
-        }
-        // 从后往前删，避免下标错位
-        for (unsigned J = N; J-- > I + 1;)
-          if (PN.getIncomingBlock(J) == In) {
-            PN.removeIncomingValue(J, /*Delete=*/false);
-            Changed = true;
-          }
-        N = PN.getNumIncomingValues();
+        if (!V)
+          V = llvm::UndefValue::get(PN.getType());
+        Vals.push_back(V);
       }
+
+      // 完全相同就不动，省得无谓改写
+      bool Same = (Vals.size() == Old);
+      if (Same)
+        for (unsigned I = 0; I < Old; ++I)
+          if (PN.getIncomingBlock(I) != Preds[I] || PN.getIncomingValue(I) != Vals[I]) {
+            Same = false;
+            break;
+          }
+      if (Same)
+        continue;
+
+      while (PN.getNumIncomingValues())
+        PN.removeIncomingValue(0, /*Delete=*/false);
+      for (unsigned I = 0; I < Preds.size(); ++I)
+        PN.addIncoming(Vals[I], Preds[I]);
+      Changed = true;
     }
+  }
   return Changed;
 }
 

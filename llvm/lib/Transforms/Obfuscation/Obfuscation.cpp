@@ -230,10 +230,10 @@ struct Obfuscation : public ModulePass {
     // [诊断] 混淆产物自检：坏 IR 在这里就以文字形式暴露，而不是在 codegen 里
     // 以 Exception Code 0x80000003 崩（release 版 verifier 默认是关的，
     // clang 的 cc1 参数里带着 -disable-llvm-verifier）。
-    // 收尾归一化：所有 pass 都是「改边」，可能留下同块双入边的 PHI
+    // 收尾归一化：所有 pass 都是「改边」，按真实边重建 PHI 入边表
     for (Function &F : M)
       if (!F.isDeclaration())
-        obf::dedupePhiIncoming(F);
+        obf::rebuildPhiIncoming(F);
 
     if (!obf::ObfDumpIR.empty()) {
       std::error_code EC;
