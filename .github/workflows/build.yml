@@ -127,13 +127,26 @@ jobs:
       - name: 编译
         run: cmake --build build --target clang -- -j 4 -k 0
 
-      - name: 自检
+      - name: 自检（混淆闸门）
         run: |
-          .\build\bin\clang.exe --version
-          Set-Content -Path p.c -Value 'const char*m(void){return "OBF_MARKER";}'
-          $ir = .\build\bin\clang.exe --target=aarch64-linux-gnu -O1 -S -emit-llvm -o - p.c `
-            -mllvm -hikari -mllvm -enable-strcry -mllvm -obf-level=3 2>&1
-          ($ir | Select-String -Pattern 'obf\.').Count
+          $cc = ".\build\bin\clang.exe"
+          & $cc --version
+          $flags = @('-mllvm','-hikari','-mllvm','-obf-level=3','-mllvm','-obf-seed=0x51A9',
+                     '-mllvm','-enable-strcry','-mllvm','-enable-cffobf','-mllvm','-enable-subobf',
+                     '-mllvm','-enable-indibran','-mllvm','-obf-junk-prob=100',
+                     '-mllvm','-obf-bcf-prob=100','-mllvm','-obf-ce-prob=100',
+                     '-mllvm','-obf-wrap-prob=100','-mllvm','-obf-sji=3','-mllvm','-obf-sji-ratio=90')
+          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o base.o
+          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M base.o >nul"
+          if ($LASTEXITCODE -ne 0) { throw "基线里没明文，探针坏了" }
+          & $cc --target=aarch64-linux-gnu -O2 -c tests/c/obf_probe.c -o obf.o @flags `
+            -mllvm -obf-verify -mllvm -obf-dump-ir=obf.ll
+          if ($LASTEXITCODE -ne 0) { throw "L3 全开编不过（看 verifier 输出）" }
+          cmd /c "findstr /C:OBF_PROBE_PLAINTEXT_9f3a /M obf.o >nul"
+          if ($LASTEXITCODE -eq 0) { throw "混淆后明文还在" }
+          cmd /c "findstr /C:indirectbr /M obf.ll >nul"
+          if ($LASTEXITCODE -ne 0) { throw "IR 里没有 indirectbr" }
+          python tests/check_ir.py obf.ll
 
       - name: 打包
         run: |

@@ -190,8 +190,13 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
     Value *Addr = DB.CreateIntToPtr(AddrV, PtrTy, "obf.sm.ap");
 
     auto *IB = IndirectBrInst::Create(Addr, N, Disp);
+    // B10：入口块不能有任何前驱（LLVM 硬规则），所以它绝不能出现在
+    // dispatch 目标表里；漏了这一条 verifier 直接报
+    // "Entry block to function must not have predecessors!"。
+    BasicBlock *Entry = &F.getEntryBlock();
     for (BasicBlock *BB : Blocks)
-      IB->addDestination(BB);
+      if (BB != Entry)
+        IB->addDestination(BB);
   }
 
     // 5. 把所有 1~2 后继的边改成 push + br dispatcher

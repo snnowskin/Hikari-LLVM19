@@ -213,9 +213,11 @@ static bool rewriteStrings(Module &M, uint64_t &S) {
     Value *SrcP =
         B.CreateInBoundsGEP(BlobTy, BlobGV, {B.getInt64(0), Idx64});
     Value *Src = B.CreateLoad(I8, SrcP, true);
-    Value *Rot = B.CreateCall(
-        Intrinsic::getDeclaration(&M, Intrinsic::fshr, {I8, I8, I8}),
-        {Src, Src, B.getInt8(3)}); // rotr8(x,3) = fshr(x,x,3)
+    // B11：llvm.fshr 的类型参数只写「操作数类型」一个，写成 {I8,I8,I8} 会
+    // 拼出 llvm.fshr.i8.i8.i8 这种非法名字，verifier 报
+    // "Intrinsic name not mangled correctly for type arguments!"
+    Value *Rot = B.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::fshr, {I8}),
+                              {Src, Src, B.getInt8(3)}); // rotr8(x,3)=fshr(x,x,3)
     Value *K8 = B.CreateTrunc(Key, I8);
     Value *Px = B.CreateXor(Rot, K8);
     Value *DstP = B.CreateInBoundsGEP(I8, Buf, {B.CreateZExt(I, I64)});

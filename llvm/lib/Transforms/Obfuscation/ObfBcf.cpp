@@ -117,21 +117,19 @@ static BasicBlock *makeEdgeGuard(BasicBlock *From, BasicBlock *Succ,
   BasicBlock *Join = BasicBlock::Create(C, "obf.bcf.j", F);
   JoinOut = Join;
 
-  BasicBlock *Head = nullptr;
-  BasicBlock *Cur = nullptr;
+  // B9：先把所有守卫块建出来，再逐个填内容。
+  // 旧写法在「给上一层补终结符」时用 IRBuilder 定位到上一层的末尾，
+  // 可那一层在上一次迭代里已经写好了终结符 —— 于是新指令全被追加到
+  // 终结符后面，verifier 直接报 "Terminator found in the middle of a
+  // basic block!"（一报就是上百个块）。
+  SmallVector<BasicBlock *, 4> Gs;
+  for (unsigned D = 0; D < Depth; ++D)
+    Gs.push_back(BasicBlock::Create(C, "obf.bcf.g", F));
 
   for (unsigned D = 0; D < Depth; ++D) {
-    BasicBlock *G = BasicBlock::Create(C, "obf.bcf.g", F);
-    if (!Head)
-      Head = G;
-    if (Cur) {
-      // 前一层守卫的假边落到这一层，形成「层层套娃」的判定链
-      IRBuilder<> PB(Cur);
-      Value *PT = makeOpaquePredicate(M, PB, S,
-                                      static_cast<unsigned>(splitmix64(S)));
-      PB.CreateCondBr(PT, G, Join);
-    }
-    Cur = G;
+    BasicBlock *G = Gs[D];
+    // 真边一路往下一层走，最后一层落到 Join；假边永远进 Bogus 链
+    BasicBlock *Next = (D + 1 < Depth) ? Gs[D + 1] : Join;
 
     IRBuilder<> B(G);
     BasicBlock *Bogus = makeBogusChain(Join, S, ObfLevel >= 3 ? 2 : 1);
@@ -143,17 +141,14 @@ static BasicBlock *makeEdgeGuard(BasicBlock *From, BasicBlock *Succ,
     switch (Shape) {
     case 0: { // 恒真条件分支
       Value *P = makeOpaquePredicate(M, B, S, static_cast<unsigned>(splitmix64(S)));
-      B.CreateCondBr(P, Join, Bogus);
+      B.CreateCondBr(P, Next, Bogus);
       break;
     }
-    case 1: { // 假 switch：case 值是随机常量，运行期永不命中
+    case 1: { // 假 switch：default 走真边，case 值是随机常量永不命中
       Value *X = loadSeedSlot(M, B);
-      auto *Sw = SwitchInst::Create(X, Join, 2, G);
-      uint64_t A = splitmix64(S);
-      uint64_t Bv = splitmix64(S);
-      Sw->addCase(ConstantInt::get(I64, A), Bogus);
-      Sw->addCase(ConstantInt::get(I64, Bv), Bogus);
-      B.SetInsertPoint(Sw);
+      auto *Sw = SwitchInst::Create(X, Next, 2, G);
+      Sw->addCase(ConstantInt::get(I64, splitmix64(S)), Bogus);
+      Sw->addCase(ConstantInt::get(I64, splitmix64(S)), Bogus);
       break;
     }
     default: { // 假 indirectbr：目的表里一真一假，地址由运行期位决定
@@ -162,10 +157,10 @@ static BasicBlock *makeEdgeGuard(BasicBlock *From, BasicBlock *Succ,
       // BlockAddress 本身就是指针类型，select 出来直接给 indirectbr 用，
       // 不需要 inttoptr（对指针做 inttoptr 是非法 IR）。
       Value *Addr = B.CreateSelect(T, BlockAddress::get(F, Bogus),
-                                   BlockAddress::get(F, Join));
+                                   BlockAddress::get(F, Next));
       auto *IB = IndirectBrInst::Create(Addr, 2);
       IB->addDestination(Bogus);
-      IB->addDestination(Join);
+      IB->addDestination(Next);
       B.Insert(IB);
       break;
     }
@@ -174,7 +169,7 @@ static BasicBlock *makeEdgeGuard(BasicBlock *From, BasicBlock *Succ,
 
   // Join 的唯一出口：它就是 Succ 的唯一新前驱
   BranchInst::Create(Succ, Join);
-  return Head ? Head : Join;
+  return Gs.empty() ? Join : Gs[0];
 }
 
 // ── 资格判定 ──
