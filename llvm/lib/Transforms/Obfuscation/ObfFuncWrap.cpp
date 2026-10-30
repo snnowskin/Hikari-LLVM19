@@ -28,7 +28,7 @@ constexpr unsigned kCookieCap = 256;
 static GlobalVariable *getCookieStack(Module &M) {
   auto *I64 = Type::getInt64Ty(M.getContext());
   auto *Ty = ArrayType::get(I64, kCookieCap);
-  if (GlobalVariable *GV = M.getGlobalVariable("obf.fw.stack"))
+  if (GlobalVariable *GV = M.getGlobalVariable("obf.fw.stack", true))
     return GV;
   auto *GV = new GlobalVariable(M, Ty, false,
                                 GlobalValue::InternalLinkage,
@@ -42,7 +42,7 @@ static GlobalVariable *getCookieStack(Module &M) {
 
 static GlobalVariable *getCookieSp(Module &M) {
   auto *I64 = Type::getInt64Ty(M.getContext());
-  if (GlobalVariable *GV = M.getGlobalVariable("obf.fw.sp"))
+  if (GlobalVariable *GV = M.getGlobalVariable("obf.fw.sp", true))
     return GV;
   auto *GV = new GlobalVariable(M, I64, false,
                                 GlobalValue::InternalLinkage,

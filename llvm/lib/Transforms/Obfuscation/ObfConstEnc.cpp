@@ -20,7 +20,7 @@ static constexpr unsigned kKeySlots = 256;
 
 // ── key 表 ──
 static GlobalVariable *getKeyTable(Module &M, uint64_t &S) {
-  if (GlobalVariable *GV = M.getGlobalVariable("obf.ce.keys"))
+  if (GlobalVariable *GV = M.getGlobalVariable("obf.ce.keys", true))
     return GV;
 
   auto *I64 = Type::getInt64Ty(M.getContext());
@@ -43,7 +43,7 @@ static GlobalVariable *getKeyTable(Module &M, uint64_t &S) {
 /// 取第 Idx 项 key，并裁到 Ty 的位宽。
 /// 必须 volatile：否则整条解密链会被常量折叠抹掉。
 static Value *loadKey(Module &M, IRBuilder<> &B, IntegerType *Ty, unsigned Idx) {
-  GlobalVariable *GV = M.getGlobalVariable("obf.ce.keys");
+  GlobalVariable *GV = M.getGlobalVariable("obf.ce.keys", true);
   if (!GV)
     return ConstantInt::get(Ty, 0);
   auto *I64 = Type::getInt64Ty(M.getContext());

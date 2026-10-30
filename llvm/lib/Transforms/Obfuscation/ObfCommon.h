@@ -229,7 +229,7 @@ inline llvm::Value *loadSeedSlot(llvm::Module &M, llvm::IRBuilder<> &B,
   auto *I64 = llvm::Type::getInt64Ty(C);
   auto *Ty  = llvm::ArrayType::get(I64, 1);
 
-  llvm::GlobalVariable *GV = M.getGlobalVariable(Name);
+  llvm::GlobalVariable *GV = M.getGlobalVariable(Name, true);
   if (!GV) {
     GV = new llvm::GlobalVariable(M, Ty, false,
                                   llvm::GlobalValue::InternalLinkage,

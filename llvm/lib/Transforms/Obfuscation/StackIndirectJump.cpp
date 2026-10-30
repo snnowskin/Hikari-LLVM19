@@ -188,7 +188,7 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
 
   // 把栈指针写进一个 volatile 全局槽：SROA / 内存提升看到「指针逃逸」就收手，
   // 否则整套栈会被提升成寄存器，L1 立刻退化成普通 switch（一点强度都没有）。
-  GlobalVariable *Esc = M.getGlobalVariable("obf.sm.esc");
+  GlobalVariable *Esc = M.getGlobalVariable("obf.sm.esc", true);
   if (!Esc) {
     Esc = new GlobalVariable(M, PtrTy, false,
                              GlobalValue::InternalLinkage,
@@ -347,11 +347,11 @@ static bool emitCrossCallRelay(Function &F, uint64_t &S) {
   LLVMContext &C = M.getContext();
   auto *I64 = Type::getInt64Ty(C);
 
-  GlobalVariable *Sp = M.getGlobalVariable("obf.sm.sp");
+  GlobalVariable *Sp = M.getGlobalVariable("obf.sm.sp", true);
   if (!Sp)
     return false; // 只有 L1 跑过才有意义
 
-  GlobalVariable *Rly = M.getGlobalVariable("obf.sm.rly");
+  GlobalVariable *Rly = M.getGlobalVariable("obf.sm.rly", true);
   if (!Rly) {
     Rly = new GlobalVariable(M, I64, false,
                              GlobalValue::InternalLinkage,
