@@ -86,6 +86,30 @@ static GlobalVariable *makeTable(Module &M, ArrayRef<Constant *> Items,
 
 // ── L1：IR 级 stack machine（v2） ──
 static bool buildStackMachine(Function &F, uint64_t &S) {
+  // B30：把边改成「push + br 分发器」以后，原本「只能经某条边到达」的块
+  // 变成从分发器直接可达，跨块使用的 SSA 值立刻失去支配关系
+  // （verifier: Instruction does not dominate all uses!）。
+  // 下手前先把所有跨基本块使用的寄存器值降到栈上，之后只剩 load/store，
+  // 支配关系就永远成立。
+  {
+    SmallVector<Instruction *, 64> Cross;
+    for (BasicBlock &BB : F)
+      for (Instruction &I : BB) {
+        if (I.getType()->isVoidTy() || isa<AllocaInst>(I) || I.isEHPad())
+          continue;
+        for (User *U : I.users()) {
+          auto *UI = dyn_cast<Instruction>(U);
+          if (UI && UI->getParent() != &BB) {
+            Cross.push_back(&I);
+            break;
+          }
+        }
+      }
+    for (Instruction *I : Cross)
+      if (I->getParent() && !I->use_empty())
+        DemoteRegToStack(*I, false, F.getEntryBlock().getFirstInsertionPt());
+  }
+
   Module &M = *F.getParent();
   LLVMContext &C = M.getContext();
   auto *I64 = Type::getInt64Ty(C);

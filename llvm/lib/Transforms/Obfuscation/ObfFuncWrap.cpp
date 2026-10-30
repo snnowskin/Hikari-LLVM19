@@ -58,8 +58,8 @@ static GlobalVariable *getCookieSp(Module &M) {
 /// 放 .data.obf（可写），运行期可被自己的初始化代码重写（抗静态 dump）。
 static GlobalVariable *getCalleeTable(Module &M, ArrayRef<Constant *> Items,
                                       StringRef Name) {
-  auto *I64 = Type::getInt64Ty(M.getContext());
-  auto *Ty = ArrayType::get(I64, Items.size());
+  auto *Ty = ArrayType::get(PointerType::getUnqual(M.getContext()),
+                            Items.size());
   auto *GV = new GlobalVariable(M, Ty, false,
                                 GlobalValue::InternalLinkage,
                                 ConstantArray::get(Ty, Items), Name);
@@ -110,8 +110,9 @@ static Function *buildWrapper(Module &M, Function &Callee, Function &Target,
 
   // 表项：ptrtoint(Target) ^ key
   uint64_t Key = splitmix64(Seed) | 1ull;
-  Constant *Enc = ConstantExpr::getXor(
-      ConstantExpr::getPtrToInt(&Target, I64), ConstantInt::get(I64, Key));
+  // 表里只放裸函数指针：xor(ptrtoint(@f)) 进静态初始化器会撞
+  // fatal error: Unsupported expression in static initializer（B29）
+  Constant *Enc = &Target;
   GlobalVariable *Tab =
       getCalleeTable(M, {Enc}, ("obf.fw.tab." + Callee.getName()).str());
 
@@ -132,8 +133,10 @@ static Function *buildWrapper(Module &M, Function &Callee, Function &Target,
     // 间接调用：从表里取指针
   Value *TabP = B.CreateInBoundsGEP(cast<ArrayType>(Tab->getValueType()), Tab,
                                     {B.getInt64(0), B.getInt64(0)});
-  Value *EncV = B.CreateLoad(I64, TabP, true, "obf.fw.enc");
-  Value *Dec = B.CreateXor(EncV, ConstantInt::get(I64, Key), "obf.fw.dec");
+  auto *P0 = PointerType::getUnqual(C);
+  Value *EncV = B.CreateLoad(P0, TabP, true, "obf.fw.enc");
+  Value *EncI = B.CreatePtrToInt(EncV, I64, "obf.fw.enci");
+  Value *Dec = B.CreateXor(EncI, ConstantInt::get(I64, Key), "obf.fw.dec");
   Value *FP = B.CreateIntToPtr(Dec, PointerType::getUnqual(C), "obf.fw.fp");
 
   SmallVector<Value *, 16> Args;
