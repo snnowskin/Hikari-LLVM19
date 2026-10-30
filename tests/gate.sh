@@ -72,6 +72,28 @@ for entry in "${FLAGSETS[@]}"; do
            -o "$OUT/${name}_${seed}_${base}.o" \
            -mllvm -hikari $flags -mllvm -obf-seed=$seed -mllvm -obf-verify \
            >"$log" 2>&1; then
+        # 效果断言：编译过不等于 pass 真的动过手。-obf-level=0 时单给
+        # -obf-junk-prob=100 什么都不做，闸门却报 pass —— 那是空跑假绿。
+        mk=""
+        case $name in
+          junk)          mk='udf|\.word' ;;
+          sji1|sji2|sji3) mk='indirectbr' ;;
+          strcry)        mk='obf\.str' ;;
+          ce)            mk='obf\.ce\.keys' ;;
+          wrap)          mk='obf_ww_' ;;
+          bcf)           mk='obf\.bcf' ;;
+          L1|L2|L3|all)  mk='indirectbr' ;;
+        esac
+        if [ -n "$mk" ]; then
+          "$CC" --target=aarch64-linux-gnu -O2 -S -emit-llvm "$src" \
+            -o "$OUT/${name}_${seed}_${base}.ll" \
+            -mllvm -hikari $flags -mllvm -obf-seed=$seed >>"$log" 2>&1
+          if ! grep -q "$mk" "$OUT/${name}_${seed}_${base}.ll" 2>/dev/null; then
+            fail "$name seed=$seed $base (无效果)"
+            emit "-- FAIL $name seed=$seed $base：IR 里找不到混淆痕迹（$mk）"
+            continue
+          fi
+        fi
         pass
       else
         fail "$name seed=$seed $base"
