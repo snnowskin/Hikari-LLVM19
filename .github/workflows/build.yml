@@ -38,7 +38,7 @@ jobs:
 
       - name: 配置
         run: |
-          ccache --max-size=2G
+          ccache --max-size=8G
           cmake -G Ninja -S llvm -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_ENABLE_PROJECTS=clang \
