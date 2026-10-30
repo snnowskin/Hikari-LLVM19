@@ -288,6 +288,14 @@ static bool opIndexForbidden(const Instruction &I, unsigned OpIdx) {
   if (const auto *CI = dyn_cast<CallInst>(&I))
     if (CI->isMustTailCall())
       return true;
+  // 结构性下标：LangRef 要求 extractvalue / insertvalue 的索引、shufflevector
+  // 的 mask 必须是常量。换成运行期值 verifier 不拦，但 codegen 会崩。
+  if (isa<ExtractValueInst>(I))
+    return OpIdx >= 1; // op0 是聚合体，能改
+  if (isa<InsertValueInst>(I))
+    return OpIdx >= 2; // op0 聚合体、op1 插入值，都能改
+  if (isa<ShuffleVectorInst>(I))
+    return OpIdx >= 2; // mask 必须是常量
   return false;
 }
 

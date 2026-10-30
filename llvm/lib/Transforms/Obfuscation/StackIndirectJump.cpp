@@ -75,8 +75,12 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
   auto *PtrTy = PointerType::getUnqual(C);
 
   SmallVector<BasicBlock *, 128> Blocks;
+  // 入口块永远不进栈机：它一旦有前驱就非法，而且 blockaddress 不允许指向
+  // 入口块（verifier 报 "blockaddress may not be used with the entry
+  // block!"）—— 我们下面要 ptrtoint(BlockAddress) 建地址表，含入口块必炸。
+  BasicBlock &EntryBB = F.getEntryBlock();
   for (BasicBlock &BB : F)
-    if (!BB.isEHPad())
+    if (!BB.isEHPad() && &BB != &EntryBB)
       Blocks.push_back(&BB);
   const unsigned N = static_cast<unsigned>(Blocks.size());
   if (N < 8)
