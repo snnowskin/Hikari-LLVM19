@@ -211,7 +211,7 @@ bool processFunctionWrapper(Module &M) {
 
   unsigned Layers = WrapLayer.getValue() > 0
                         ? static_cast<unsigned>(WrapLayer.getValue())
-                        : (ObfLevel >= 3 ? 3u : ObfLevel >= 2 ? 2u : 1u);
+                        : (effLevel() >= 3 ? 3u : effLevel() >= 2 ? 2u : 1u);
   if (Layers > 3)
     Layers = 3;
 
@@ -279,3 +279,7 @@ PreservedAnalyses runFunctionWrapper(Module &M, ModuleAnalysisManager &) {
 }
 
 } // namespace obf
+
+bool wrapRequested() {
+  return WrapProb.getNumOccurrences() > 0;
+}

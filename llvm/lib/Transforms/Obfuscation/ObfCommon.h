@@ -27,6 +27,10 @@
 #include <cstdint>
 
 namespace obf {
+// 调用点用：显式给了 flag 就算被请求（上游那套 -enable-* 不强制要求）
+bool wrapRequested();
+bool ceRequested();
+
 
 // ── PHI 归一化：按真实前驱边（含重复边）重建入边表 ──
 // Verifier.cpp:3100-3140 规定：同一前驱块可以有多条入边，但这些入边的值
@@ -187,6 +191,14 @@ inline int levelScale(int BaseProb) {
 /// 显式给过 flag 就照办，否则用档位缩放后的默认值。
 /// 老写法是「ObfLevel==0 直接 return false」，于是单独给 -obf-junk-prob=100
 /// 什么都不会发生 —— 用户以为花指令开了，其实一条都没插。
+/// 显式给了某个 pass 的 flag（如 -obf-junk-prob=100）却没给 -obf-level 时，
+/// 按最高档的形状跑；什么都没给时仍是 0，等于完全不动。
+/// 之前只看 ObfLevel，导致「只给 flag」虽然概率非 0，形态却还是最弱那档，
+/// 数据岛 / udf / 三段链这些全被 `ObfLevel >= 3` 挡掉 —— 看起来像没生效。
+inline int effLevel() {
+  return ObfLevel.getNumOccurrences() > 0 ? static_cast<int>(ObfLevel) : 3;
+}
+
 template <typename OptT> inline int probOf(OptT &O, int BaseProb) {
   if (O.getNumOccurrences() > 0)
     return static_cast<int>(O.getValue());

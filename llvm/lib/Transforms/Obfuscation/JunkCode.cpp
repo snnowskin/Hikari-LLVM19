@@ -155,13 +155,13 @@ bool processJunkCode(Function &F) {
 
     switch (splitmix64(S) % 3) {
     case 0:
-      if (ObfLevel >= 3) { // L3 才上数据岛（体积换强度）
+      if (effLevel() >= 3) { // L3 才上数据岛（体积换强度）
         insertDataIsland(F, BB, S, 4 + static_cast<unsigned>(splitmix64(S) % 60));
         Changed = true;
       }
       break;
     case 1:
-      if (ObfLevel >= 3) {
+      if (effLevel() >= 3) {
         insertUdfTrap(F, BB, S);
         Changed = true;
       }

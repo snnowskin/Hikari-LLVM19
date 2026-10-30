@@ -78,10 +78,10 @@ for entry in "${FLAGSETS[@]}"; do
         case $name in
           junk)          mk='udf|\.word' ;;
           sji1|sji2|sji3) mk='indirectbr' ;;
-          strcry)        mk='obf\.str' ;;
+          strcry)        mk='obf_str_blob' ;;
           ce)            mk='obf\.ce\.keys' ;;
           wrap)          mk='obf_ww_' ;;
-          bcf)           mk='obf\.bcf' ;;
+          bcf)           mk='call void asm sideeffect' ;;
           L1|L2|L3|all)  mk='indirectbr' ;;
         esac
         if [ -n "$mk" ]; then

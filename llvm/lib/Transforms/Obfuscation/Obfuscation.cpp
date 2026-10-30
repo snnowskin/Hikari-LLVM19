@@ -206,7 +206,7 @@ struct Obfuscation : public ModulePass {
     // 浮点常量是明文躺在 .rodata 里的 —— 这里补上，L3 档连 f32/f64/f80 一起编。
     for (Function &F : M)
       if (!F.isDeclaration())
-        obf::processConstantEncryption(F);
+        obf::processConstantEncryption(F); // 内部自判（-obf-ce-prob 或 -obf-level）
 
     // [OLLVM 魔改 §4.3] 字符串加密后置：此时结构层已定型，搬移 blob 不再触发重排
     if (EnableAllObfuscation || EnableStringEncryption)
@@ -224,7 +224,7 @@ struct Obfuscation : public ModulePass {
     delete P;
     // [OLLVM 魔改 §4.6] 函数包装：上游那份自标 // Broken（改 LR 再 ret 会无限递归），
     // 这里换成纯 IR 转发的重做版：TLS cookie 栈 + 加密 callee 表 + 失败即 brk #0。
-    if (EnableAllObfuscation || EnableFunctionWrapper)
+    if (EnableAllObfuscation || EnableFunctionWrapper || obf::wrapRequested())
       obf::processFunctionWrapper(M);
 
     // [诊断] 混淆产物自检：坏 IR 在这里就以文字形式暴露，而不是在 codegen 里

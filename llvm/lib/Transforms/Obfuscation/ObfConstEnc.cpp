@@ -355,7 +355,7 @@ bool processConstantEncryption(Function &F) {
 
   unsigned Rings = CeStrength.getValue() > 0
                        ? static_cast<unsigned>(CeStrength.getValue())
-                       : (ObfLevel >= 3 ? 3u : ObfLevel >= 2 ? 2u : 1u);
+                       : (effLevel() >= 3 ? 3u : effLevel() >= 2 ? 2u : 1u);
   if (Rings > 3)
     Rings = 3;
 
@@ -372,7 +372,7 @@ bool processConstantEncryption(Function &F) {
       Insts.push_back(&I);
 
   for (Instruction *I : Insts) {
-    if (I->getOpcode() == Instruction::Ret && ObfLevel < 2)
+    if (I->getOpcode() == Instruction::Ret && effLevel() < 2)
       continue;
     unsigned N = I->getNumOperands();
     for (unsigned O = 0; O < N; ++O) {
@@ -395,3 +395,7 @@ PreservedAnalyses runConstantEncryption(Function &F, FunctionAnalysisManager &) 
 }
 
 } // namespace obf
+
+bool ceRequested() {
+  return CeProb.getNumOccurrences() > 0;
+}

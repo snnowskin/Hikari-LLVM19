@@ -67,7 +67,7 @@ static BasicBlock *makeBogusChain(BasicBlock *Real, uint64_t &S,
     // 死块：再来一层垃圾 + 伪 dispatcher（indirectbr 表只有 Real 一个真项）
     IRBuilder<> D(Dead);
     emitJunkAsm(M, D, S);
-    if (ObfLevel >= 3) {
+    if (effLevel() >= 3) {
       Value *X = loadSeedSlot(M, D);
       Value *Bit =
           D.CreateTrunc(D.CreateAnd(X, ConstantInt::get(Type::getInt64Ty(C), 1)),
@@ -132,10 +132,10 @@ static BasicBlock *makeEdgeGuard(BasicBlock *From, BasicBlock *Succ,
     BasicBlock *Next = (D + 1 < Depth) ? Gs[D + 1] : Join;
 
     IRBuilder<> B(G);
-    BasicBlock *Bogus = makeBogusChain(Join, S, ObfLevel >= 3 ? 2 : 1);
+    BasicBlock *Bogus = makeBogusChain(Join, S, effLevel() >= 3 ? 2 : 1);
 
     unsigned Shape = static_cast<unsigned>(splitmix64(S) % 3);
-    if (ObfLevel < 2)
+    if (effLevel() < 2)
       Shape = 0;
 
     switch (Shape) {
@@ -217,7 +217,7 @@ bool processBogusControlFlow(Function &F) {
 
   unsigned Depth = BcfDepth.getValue() > 0
                        ? static_cast<unsigned>(BcfDepth.getValue())
-                       : (ObfLevel >= 3 ? 3u : ObfLevel >= 2 ? 2u : 1u);
+                       : (effLevel() >= 3 ? 3u : effLevel() >= 2 ? 2u : 1u);
 
   uint64_t S = funcSeed(*F.getParent(), F);
 
