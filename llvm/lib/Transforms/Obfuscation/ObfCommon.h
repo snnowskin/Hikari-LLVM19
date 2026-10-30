@@ -28,12 +28,11 @@
 
 namespace obf {
 
-// ── PHI 归一化：按真实前驱边重建入边表 ──
-// 我们的 pass 都是「改边」，改完可能出现
-//   · 同一块有两个入口边，PHI 只有一条入边   → verifier 报入边不足
-//   · 块有两条入边，PHI 有两条同块入边        → verifier 报 multiple entries
-// 这里统一按前驱边（含重复边）重建，值按原顺序逐条对应，
-// 找不到对应值的边填 undef（这种边原本就不可达）。
+// ── PHI 归一化：按真实前驱边（含重复边）重建入边表 ──
+// Verifier.cpp:3100-3140 规定：同一前驱块可以有多条入边，但这些入边的值
+// 必须完全相同。我们改边之后常出现「同块多边只有一条入边」或「同块多边配了
+// 不同值」，两种都直接 fail。这里按 predecessors() 的真实顺序重建，
+// 同块的多条边共用同一个值；一条边都找不到值的填 undef（原本就不可达）。
 inline bool rebuildPhiIncoming(llvm::Function &F) {
   bool Changed = false;
   for (llvm::BasicBlock &BB : F) {
@@ -45,22 +44,28 @@ inline bool rebuildPhiIncoming(llvm::Function &F) {
 
     for (llvm::PHINode &PN : BB.phis()) {
       const unsigned Old = PN.getNumIncomingValues();
-      llvm::SmallVector<llvm::Value *, 16> Vals;
-      llvm::SmallVector<char, 16> Used(Old, 0);
+      llvm::SmallVector<llvm::BasicBlock *, 16> SeenB;
+      llvm::SmallVector<llvm::Value *, 16> SeenV, Vals;
       for (llvm::BasicBlock *P : Preds) {
         llvm::Value *V = nullptr;
-        for (unsigned I = 0; I < Old; ++I)
-          if (!Used[I] && PN.getIncomingBlock(I) == P) {
-            V = PN.getIncomingValue(I);
-            Used[I] = 1;
+        for (unsigned I = 0; I < SeenB.size(); ++I)
+          if (SeenB[I] == P) {
+            V = SeenV[I];
             break;
           }
         if (!V)
+          for (unsigned I = 0; I < Old; ++I)
+            if (PN.getIncomingBlock(I) == P) {
+              V = PN.getIncomingValue(I);
+              break;
+            }
+        if (!V)
           V = llvm::UndefValue::get(PN.getType());
+        SeenB.push_back(P);
+        SeenV.push_back(V);
         Vals.push_back(V);
       }
 
-      // 完全相同就不动，省得无谓改写
       bool Same = (Vals.size() == Old);
       if (Same)
         for (unsigned I = 0; I < Old; ++I)
@@ -71,7 +76,7 @@ inline bool rebuildPhiIncoming(llvm::Function &F) {
       if (Same)
         continue;
 
-      unsigned Zero = 0;   // 显式变量：字面量 0 在 unsigned/BasicBlock* 两个重载间二义
+      unsigned Zero = 0; // 字面量 0 在 unsigned / BasicBlock* 两个重载间二义
       while (PN.getNumIncomingValues())
         PN.removeIncomingValue(Zero, /*Delete=*/false);
       for (unsigned I = 0; I < Preds.size(); ++I)
@@ -82,6 +87,20 @@ inline bool rebuildPhiIncoming(llvm::Function &F) {
   return Changed;
 }
 
+// ── cond br 两支同目标时退化成无条件跳转 ──
+// 重复边会让 PHI 必须写两条同值入边，语义上等价于一条边，直接压平。
+inline bool canonicalizeDupEdges(llvm::Function &F) {
+  bool Changed = false;
+  for (llvm::BasicBlock &BB : F) {
+    auto *BI = llvm::dyn_cast<llvm::BranchInst>(BB.getTerminator());
+    if (BI && BI->isConditional() && BI->getSuccessor(0) == BI->getSuccessor(1)) {
+      llvm::BranchInst::Create(BI->getSuccessor(0), BI);
+      BI->eraseFromParent();
+      Changed = true;
+    }
+  }
+  return Changed;
+}
 
 // ── 命令行：全部 pass 共享一套档位，不再散落在各 .cpp 顶部 ──
 // -mllvm -obf-level=<0..3>   0=关 1=标准 2=专业 3=变态

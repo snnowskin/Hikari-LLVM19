@@ -232,8 +232,10 @@ struct Obfuscation : public ModulePass {
     // clang 的 cc1 参数里带着 -disable-llvm-verifier）。
     // 收尾归一化：所有 pass 都是「改边」，按真实边重建 PHI 入边表
     for (Function &F : M)
-      if (!F.isDeclaration())
+      if (!F.isDeclaration()) {
+        obf::canonicalizeDupEdges(F);
         obf::rebuildPhiIncoming(F);
+      }
 
     if (!obf::ObfDumpIR.empty()) {
       std::error_code EC;
