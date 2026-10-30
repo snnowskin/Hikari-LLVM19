@@ -27,6 +27,40 @@
 
 namespace obf {
 
+// ── PHI 入边去重：同一前驱块出现多条入边是非法的 ──
+// 我们的 pass 都是「改边」而不是「重建块」，改动后可能出现
+// br %c, %J, %J 这种双边上同一目标，PHI 于是拿到两条同块入边。
+// 语义上两条边来自同一块、值必然相同，保留第一条即可。
+inline bool dedupePhiIncoming(llvm::Function &F) {
+  bool Changed = false;
+  for (llvm::BasicBlock &BB : F)
+    for (llvm::PHINode &PN : BB.phis()) {
+      llvm::SmallVector<llvm::BasicBlock *, 8> Seen;
+      for (unsigned I = 0, N = PN.getNumIncomingValues(); I < N; ++I) {
+        llvm::BasicBlock *In = PN.getIncomingBlock(I);
+        bool Dup = false;
+        for (llvm::BasicBlock *S : Seen)
+          if (S == In) {
+            Dup = true;
+            break;
+          }
+        if (!Dup) {
+          Seen.push_back(In);
+          continue;
+        }
+        // 从后往前删，避免下标错位
+        for (unsigned J = N; J-- > I + 1;)
+          if (PN.getIncomingBlock(J) == In) {
+            PN.removeIncomingValue(J, /*Delete=*/false);
+            Changed = true;
+          }
+        N = PN.getNumIncomingValues();
+      }
+    }
+  return Changed;
+}
+
+
 // ── 命令行：全部 pass 共享一套档位，不再散落在各 .cpp 顶部 ──
 // -mllvm -obf-level=<0..3>   0=关 1=标准 2=专业 3=变态
 // -mllvm -obf-seed=<u64>     构建种子，CI 里必须传，保证可复现

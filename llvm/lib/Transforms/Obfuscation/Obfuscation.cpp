@@ -186,6 +186,12 @@ struct Obfuscation : public ModulePass {
         delete P;
         // [OLLVM 魔改 §4.2] 花指令：数据岛 / udf 陷阱 / 假栈帧
         obf::processJunkCode(F);
+        // [OLLVM 魔改 §4.5] 堆栈式间接跳转：必须排在 BCF/常量加密之前。
+        // 它会把每个块改成「push + br 分发器」，等于给块加了一个新前驱
+        // 分发器；如果先跑 BCF，BCF 插在块里的种子 load 就会被这个新前驱
+        // 反支配（verifier: Instruction does not dominate all uses!）。
+        // 反过来先跑 SJI，后面几个 pass 只在本块内插指令，不会破坏支配。
+        obf::processStackIndirectJump(F);
         // [OLLVM 魔改 §4.1] 虚假控制流：边守卫 + 链式假块。
         // 放在上游 BCF/FLA 之后 —— 这样连平坦化后的 dispatcher 边也被串守卫，
         // 而不是只包住最外层原始块。
@@ -210,11 +216,9 @@ struct Obfuscation : public ModulePass {
                                                EnableIndirectBranching);
     for (Function &F : M)
       if (!F.isDeclaration()) {
-        // [OLLVM 魔改 §4.5] 堆栈式间接跳转：必须跑在 IndirectBranch 之前 ——
-        // 上游 IndirectBranch 会把 br 全换成 indirectbr，而 SJI 明确跳过
-        // indirectbr 终结符（它自己就是一层栈机，不该被二次改写）。顺序反了
-        // SJI 的覆盖率会掉到接近 0（B19）。档位判定在 processStackIndirectJump 内部。
-        obf::processStackIndirectJump(F);
+        // SJI 已经在上面（junk 之后）跑过，这里只保留 IndirectBranch：
+        // 它会把 br 换成 indirectbr，而 SJI 明确跳过 indirectbr 终结符（它自己
+        // 就是一层栈机，不该被二次改写）。顺序反了 SJI 覆盖率会掉到接近 0（B19）。
         P->runOnFunction(F);
       }
     delete P;
@@ -226,6 +230,11 @@ struct Obfuscation : public ModulePass {
     // [诊断] 混淆产物自检：坏 IR 在这里就以文字形式暴露，而不是在 codegen 里
     // 以 Exception Code 0x80000003 崩（release 版 verifier 默认是关的，
     // clang 的 cc1 参数里带着 -disable-llvm-verifier）。
+    // 收尾归一化：所有 pass 都是「改边」，可能留下同块双入边的 PHI
+    for (Function &F : M)
+      if (!F.isDeclaration())
+        obf::dedupePhiIncoming(F);
+
     if (!obf::ObfDumpIR.empty()) {
       std::error_code EC;
       raw_fd_ostream OS(obf::ObfDumpIR, EC);
