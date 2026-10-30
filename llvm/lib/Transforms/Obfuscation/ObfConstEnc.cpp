@@ -4,6 +4,7 @@
 // 禁改：switch case、indirectbr 目的块、ImmArg 实参、landingpad 系列、musttail 实参。
 //===----------------------------------------------------------------------===//
 #include "ObfCommon.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
 
@@ -95,25 +96,36 @@ static APInt encodeBits(const APInt &Bits, const APInt &K1, const APInt &K2,
 /// 链形态（与 encodeBits 严格镜像）：t = enc ^ k1; t -= k2; t = rotr(t, r)
 static Value *emitDecodeChain(Module &M, IRBuilder<> &B, IntegerType *Ty,
                               const APInt &Enc, unsigned K1i, unsigned K2i,
-                              unsigned R, unsigned Rings) {
+                              unsigned R, unsigned Rings,
+                              SmallVectorImpl<Instruction *> *Created) {
   unsigned W = Ty->getIntegerBitWidth();
 
   Value *V = ConstantInt::get(Ty, Enc);
   Value *K1 = loadKey(M, B, Ty, K1i);
   Value *T = B.CreateXor(V, K1, "obf.ce.d1");
+  if (Created)
+    Created->push_back(cast<Instruction>(T));
   if (W == 1)
     return T; // i1：只有一段异或，且 key 是运行期位（不引入非法移位）
 
   if (Rings >= 2) {
     Value *K2 = loadKey(M, B, Ty, K2i);
     T = B.CreateSub(T, K2, "obf.ce.d2");
+    if (Created)
+      Created->push_back(cast<Instruction>(T));
   }
 
   if (Rings >= 3) {
     // rotr(T, R) = (T >> R) | (T << (W - R))，手搓旋转（宽度不必是 2 的幂）
     Value *Lo = B.CreateLShr(T, ConstantInt::get(Ty, R), "obf.ce.rl");
     Value *Hi = B.CreateShl(T, ConstantInt::get(Ty, W - R), "obf.ce.rh");
+    if (Created) {
+      Created->push_back(cast<Instruction>(Lo));
+      Created->push_back(cast<Instruction>(Hi));
+    }
     T = B.CreateOr(Lo, Hi, "obf.ce.d3");
+    if (Created)
+      Created->push_back(cast<Instruction>(T));
   }
 
   return T;
@@ -202,7 +214,8 @@ static bool extractBits(Constant *C, APInt &Bits, IntegerType *&IntTy,
 
 // ── 单个 operand 的加密 ──
 static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
-                           unsigned Rings) {
+                           unsigned Rings,
+                           SmallVectorImpl<Instruction *> *Created) {
   Value *Op = I.getOperand(OpIdx);
   auto *C = dyn_cast<Constant>(Op);
   if (!C || isa<GlobalValue>(C) || isa<ConstantExpr>(C))
@@ -282,7 +295,7 @@ static bool encryptOperand(Instruction &I, unsigned OpIdx, uint64_t &S,
 
   if (ObfDebug)
     errs() << "[ce]   building chain\n";
-  Value *Dec = emitDecodeChain(M, B, IntTy, Enc, K1i, K2i, R, Rings);
+  Value *Dec = emitDecodeChain(M, B, IntTy, Enc, K1i, K2i, R, Rings, Created);
   if (ObfDebug)
     errs() << "[ce]   chain ok\n";
   if (OrigTy != IntTy) {
@@ -364,6 +377,11 @@ bool processConstantEncryption(Function &F) {
   getKeyTable(M, S);
 
   bool Changed = false;
+  // B32：译码链插在「用它的那条指令所在块」或 PHI 的前驱块里。CFG 一旦被
+  // BCF/SJI 改过（插 Join、接分发器），跨块使用的链值就不再满足支配关系
+  // （verifier: Instruction does not dominate all uses!）。收尾时把这些值
+  // 统一降到栈上 —— DemoteRegToStack 会按需在前驱块末尾补 load，PHI 也能接上。
+  SmallVector<Instruction *, 128> CreatedChain;
 
   // 快照指令（加密时只改 operand，不增删指令，但仍按快照走更稳）
   SmallVector<Instruction *, 256> Insts;
@@ -380,10 +398,28 @@ bool processConstantEncryption(Function &F) {
         continue;
       if (!rollChance(S, P))
         continue;
-      if (encryptOperand(*I, O, S, Rings))
+      if (encryptOperand(*I, O, S, Rings, &CreatedChain))
         Changed = true;
     }
   }
+
+  // 收尾：只降那些真的被别的块用到的链值
+  SmallVector<Instruction *, 16> Demote;
+  for (Instruction *I : CreatedChain) {
+    if (!I || !I->getParent())
+      continue;
+    BasicBlock *DefBB = I->getParent();
+    for (User *U : I->users()) {
+      auto *UI = dyn_cast<Instruction>(U);
+      if (UI && UI->getParent() != DefBB) {
+        Demote.push_back(I);
+        break;
+      }
+    }
+  }
+  for (Instruction *I : Demote)
+    if (I->getParent() && !I->use_empty())
+      DemoteRegToStack(*I, false, F.getEntryBlock().getFirstInsertionPt());
 
   return Changed;
 }
