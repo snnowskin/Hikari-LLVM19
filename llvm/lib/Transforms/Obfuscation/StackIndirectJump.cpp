@@ -58,7 +58,7 @@ static bool sjiEligible(const Function &F) {
 /// AsmPrinter 只会加法重定位，落到静态初始化器就报
 /// `Unsupported expression in static initializer`。改成存裸 blockaddress
 /// 指针，xor 挪到运行期做。
-static GlobalVariable *makePtrTable(Module &M, ArrayRef<Constant *> Items,
+[[maybe_unused]] static GlobalVariable *makePtrTable(Module &M, ArrayRef<Constant *> Items,
                                     StringRef Name) {
   auto *PtrTy = PointerType::getUnqual(M.getContext());
   auto *Ty = ArrayType::get(PtrTy, Items.size());
@@ -161,13 +161,24 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
     KCell.push_back(ConstantInt::get(I64, splitmix64(S)));
 
   for (unsigned P = 0; P < N; ++P) {
-    // 直接存 blockaddress 指针（合法静态初始化器），key 单独一张 i64 表
-    Tab.push_back(BlockAddress::get(&F, Blocks[P]));
+    // B35 修法：地址表存 ptrtoint(blockaddress)，而不是裸指针。
+    //
+    // 为什么不是裸指针：dispatcher 要算 `addr = tab[p] ^ key`。裸指针表
+    // 链接后高 32 位为 0（Android 用户态地址 < 4GB 时代如此，但共享库常被
+    // 加载到 0x7xxxxxxxxx），key 却是完整 64 位随机数 —— 异或后高位残留
+    // key，结果必然是野指针。实测 8 项目标全部落在 .text 之外，运行期直接
+    // SIGSEGV 在 0xf656f7b584d29917 这种地址上。
+    //
+    // ptrtoint 在静态初始化器里是合法的：它生成 R_AARCH64_ABS64（加法
+    // 重定位），链接器接受；B24 踩的是「xor + 重定位」，不是 ptrtoint 本身。
+    // 改成 i64 之后，tab[p] 与 key 都是真正的 64 位量，宽度失配消失。
+    Tab.push_back(
+        ConstantExpr::getPtrToInt(BlockAddress::get(&F, Blocks[P]), I64));
     BKey.push_back(ConstantInt::get(I64, BlockKey[P]));
   }
 
   GlobalVariable *KTab = makeTable(M, KCell, "obf.sm.kc");
-  GlobalVariable *AddrTab = makePtrTable(M, Tab, "obf.sm.ad");
+  GlobalVariable *AddrTab = makeTable(M, Tab, "obf.sm.ad");
   GlobalVariable *KeyTab = makeTable(M, BKey, "obf.sm.bk");
   GlobalVariable *PermTab = makeTable(
       M,
@@ -227,8 +238,8 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
     auto *TabTy = cast<ArrayType>(AddrTab->getValueType());
     auto *BkTy = cast<ArrayType>(KeyTab->getValueType());
     Value *TabP = DB.CreateInBoundsGEP(TabTy, AddrTab, {DB.getInt64(0), P});
-    Value *EncP = DB.CreateLoad(PtrTy, TabP, true, "obf.sm.e");
-    Value *Enc = DB.CreatePtrToInt(EncP, I64, "obf.sm.ei");
+    // 表项已经是 i64（ptrtoint 存进去的），不需要再 ptrtoint 一次
+    Value *Enc = DB.CreateLoad(I64, TabP, true, "obf.sm.e");
     Value *BkP = DB.CreateInBoundsGEP(BkTy, KeyTab, {DB.getInt64(0), P});
     Value *Bk = DB.CreateLoad(I64, BkP, true, "obf.sm.bk");
     Value *AddrV = DB.CreateXor(Enc, Bk, "obf.sm.addr");

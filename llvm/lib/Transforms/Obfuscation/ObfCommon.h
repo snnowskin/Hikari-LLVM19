@@ -161,18 +161,27 @@ inline bool isNoObf(const llvm::Function &F) {
       N.starts_with("__obf_runtime_") || N.contains("obf_skip_"))
     return true;
 
-  // 路 2：注解。上游部分分支只认这条，两路都写才稳（文档 §8.19）。
-  //   C 侧：__attribute__((annotate("no_obf")))
-  //   IR 侧：Hikari 的 annotation2Metadata 会把它折成 Function 上的
-  //          !annotation 元数据；折之前则躺在 llvm.global.annotations 数组里。
-  //   注意：注解不是指令（没有 llvm::AnnotateInst 这种东西），别找错地方。
-  llvm::SmallVector<llvm::MDNode *, 4> Ann;
-  F.getMetadata("annotation", Ann);
-  for (llvm::MDNode *N : Ann)
-    for (const llvm::MDOperand &Op : N->operands())
-      if (const auto *S = llvm::dyn_cast_or_null<llvm::MDString>(Op.get()))
-        if (S->getString() == "no_obf")
-          return true;
+  // 路 2：注解。C 侧写 __attribute__((annotate("no_obf")))。
+  //
+  // ★ B33：这里必须读 "MD_obf"，不是 "annotation"。
+  //   clang 前端先把注解放在 llvm.global.annotations 数组里；调度器开头的
+  //   annotation2Metadata(M)（Utils.cpp:289）会把它搬成函数上的 MD_obf 元数据
+  //   （Utils.cpp:154 的 obfkindid、Utils.cpp:348 的 setMetadata）。
+  //   早先这里读 "annotation"，永远取不到 —— 注解保护形同虚设，带注解的函数
+  //   照样被花指令/BCF/包装覆盖。实测：带注解的循环函数在 -obf-junk-prob=100
+  //   下仍被插入，只有 obf_no_ 前缀真的生效。
+  //
+  //   两条路都读：annotation2Metadata 之前（个别 pass 走在前端 IR 上）是
+  //   "annotation"，之后是 "MD_obf"。
+  for (llvm::StringRef Key : {"MD_obf", "annotation"}) {
+    llvm::SmallVector<llvm::MDNode *, 4> Ann;
+    F.getMetadata(Key, Ann);
+    for (llvm::MDNode *N : Ann)
+      for (const llvm::MDOperand &Op : N->operands())
+        if (const auto *S = llvm::dyn_cast_or_null<llvm::MDString>(Op.get()))
+          if (S->getString() == "no_obf")
+            return true;
+  }
 
   return false;
 }

@@ -35,7 +35,11 @@ static GlobalVariable *getCookieStack(Module &M) {
                                 ConstantAggregateZero::get(Ty), "obf.fw.stack");
   GV->setThreadLocalMode(GlobalValue::GeneralDynamicTLSModel);
   GV->setAlignment(Align(8));
-  GV->setSection(".data.obf");
+  // ★ 必须独立成节：TLS 变量的节带 SHF_TLS 位，普通 .data.obf 不带。
+  // 同名不同 flags 的两节 lld 直接报 `incompatible section flags for .data`
+  // （rt_probe.c L3 全档静态链接可复现）。TLS 有自己的一套寻址与 reloc，
+  // 与 key 表/种子槽混在一节本来也不对。
+  GV->setSection(".data.obf.tls");
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
   return GV;
 }
@@ -49,7 +53,11 @@ static GlobalVariable *getCookieSp(Module &M) {
                                 ConstantInt::get(I64, 0), "obf.fw.sp");
   GV->setThreadLocalMode(GlobalValue::GeneralDynamicTLSModel);
   GV->setAlignment(Align(8));
-  GV->setSection(".data.obf");
+  // ★ 必须独立成节：TLS 变量的节带 SHF_TLS 位，普通 .data.obf 不带。
+  // 同名不同 flags 的两节 lld 直接报 `incompatible section flags for .data`
+  // （rt_probe.c L3 全档静态链接可复现）。TLS 有自己的一套寻址与 reloc，
+  // 与 key 表/种子槽混在一节本来也不对。
+  GV->setSection(".data.obf.tls");
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
   return GV;
 }
