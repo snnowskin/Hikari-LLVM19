@@ -1,12 +1,21 @@
 /* rt_probe.c —— 运行期正确性探针（无 libc，aarch64 静态可执行）
  *
  * 用法：
- *   clang --target=aarch64-linux-gnu -nostdlib -static -O2 rt_probe.c -o rt.elf <混淆旗标>
+ *   clang --target=aarch64-linux-gnu -nostdlib -static -O2 -fno-inline \
+ *         rt_probe.c -o rt.elf <混淆旗标>
  *   qemu-aarch64-static ./rt.elf   期望退出码 0
  *
  * 原理：同一份函数体被编译两遍 —— 一遍会进混淆流水线，一遍带
  * annotate("no_obf") 被 isNoObf() 放过。运行期逐个比对，任何一个不一致
  * 就 exit(序号)。这样「不崩但算错」那类 bug 也能在 CI 里抓到。
+ *
+ * ★ -fno-inline 是必须的，不是可选项。
+ *   OBF_ATTR 里的 noinline 挡不住 -O2：static + 单调用点的函数仍会被
+ *   AlwaysInliner / IPCP 内联进 _start，随后两个「完全相同的函数体」被
+ *   合并成一份 —— 探针的「双副本对照」直接消失。实测 -O2 且只有 noinline
+ *   时，c_switch / c_nestloop / c_fp / c_mix / c_str / c_stack 全部从 IR
+ *   里消失（只剩 _start 和两个 c_recur），此时本探针恒过，测不出任何东西。
+ *   这正是 2026-11-01 那次「常量加密算错」误报的来源。
  */
 
 typedef unsigned int u32;

@@ -131,7 +131,9 @@ else
     log=$OUT/rt_$tier.log
     hk=""
     [ "$tier" != base ] && hk="-mllvm -hikari"
-    if ! "$CC" --target=aarch64-linux-gnu -O2 -nostdlib -static \
+    # -fno-inline 必须带：noinline 挡不住 -O2，两个副本会被内联+合并，
+    # 「双副本对照」消失后本项恒过（假绿）。见 rt_probe.c 头注释。
+    if ! "$CC" --target=aarch64-linux-gnu -O2 -fno-inline -nostdlib -static \
          -fuse-ld=lld "$ROOT/tests/c/rt_probe.c" -o "$elf" \
          $hk $tflags -mllvm -obf-seed=0x51A9 -mllvm -obf-verify >"$log" 2>&1; then
       fail "rt $tier 链接"
