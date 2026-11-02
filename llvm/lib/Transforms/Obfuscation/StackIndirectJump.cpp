@@ -316,16 +316,25 @@ static bool emitRetSled(BasicBlock *BB, BasicBlock *Target) {
 
   Constant *Tgt = BlockAddress::get(F, Target);
 
-  // sub sp,#16 → 存 [x29, x30] → 目标写进 x30 槽 → 只弹回 x29（sp 一起抬回）
-  // → ret 用 x30 里的目标地址返回。5 条指令，栈严格配平。
-  const char *AsmText = "sub sp, sp, #16\n\t"
-                        "stp x29, x30, [sp]\n\t"
-                        "str $0, [sp, #8]\n\t"
-                        "ldr x29, [sp], #16\n\t"
-                        "ret";
+  // ── B39：这里曾经用 `ret` 跳转，是错的 ──
+  //
+  // 原实现先把真 LR 存进栈，再把目标地址写进 x30 槽，然后 `ret`。
+  // 但栈里那个真 LR 再也没被恢复 —— x30 被目标地址覆盖后，目标块末尾
+  // 执行自己的 `ret` 时用的还是这个被污染的值，于是跳回 sled，形成死循环。
+  // 实测（unicorn）：sji=2/3 卡在 sled 的 add 指令上 pc 不变，rc=no-exit；
+  // 递归函数（c_recur）尤其明显，因为它的每次返回都变成一次「跳回 sled」。
+  //
+  // 根子上，ARM64 的 x30 同时是「调用返回地址」和「间接跳转目标寄存器」，
+  // 「借 LR 跳转」和「函数返回」不可能共存 —— 除非在目标块入口恢复 LR，
+  // 那要改每个块的前缀，代价远大于收益。
+  //
+  // 改成 `br`：形态上仍是「寄存器里的目标地址 + 间接跳转」，
+  // 反编译看到的还是 br xN，只是不再和函数返回混淆。LR 完全不动，语义安全。
+  // 代价：静态分析区分「跳转」与「返回」变得容易一点 —— 但正确性优先。
+  const char *AsmText = "br $0";
 
   FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {P0}, false);
-  InlineAsm *IA = makeAsm(M, FT, AsmText, "r,~{x29},~{x30},~{memory}",
+  InlineAsm *IA = makeAsm(M, FT, AsmText, "r,~{memory}",
                           /*HasSideEffects=*/true);
 
   IRBuilder<> B(Term);

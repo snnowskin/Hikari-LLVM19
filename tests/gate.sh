@@ -79,7 +79,10 @@ for entry in "${FLAGSETS[@]}"; do
         mk=""
         case $name in
           junk)          mk='udf|\.word' ;;
-          sji1|sji2|sji3) [ "$base" = rt_probe ] && mk='indirectbr' ;;
+          # B35 终版：dispatcher 从 indirectbr 改成 switch（blockaddress 进
+          # 全局表会被 LLVM 20 折叠成常量 1 且不产生重定位）。断言跟着换成
+          # obf.sm.kc —— 那是栈机的 cell-key 表，只有 SJI 会建。
+          sji1|sji2|sji3) [ "$base" = rt_probe ] && mk='obf\.sm\.kc' ;;
           strcry)        mk='obf_str_blob' ;;
           ce)            mk='obf\.ce\.keys' ;;
           wrap)          mk='obf_ww_' ;;
