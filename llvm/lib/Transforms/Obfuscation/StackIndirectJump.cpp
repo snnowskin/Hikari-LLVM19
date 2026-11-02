@@ -151,35 +151,17 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
   for (unsigned I = 0; I < Cells; ++I)
     InvCell[Perm[I]] = I;
 
-    // 2. 三张表：cell key / 目标地址 / 目标 key
-  std::vector<Constant *> KCell, Tab, BKey;
-  std::vector<uint64_t> BlockKey(N);
-  for (unsigned I = 0; I < N; ++I)
-    BlockKey[I] = splitmix64(S);
-
+    // 2. 表：cell key + 置换表
+  //
+  // 地址表（obf.sm.ad / obf.sm.bk）已废弃 —— 见下面 dispatcher 处的长注释：
+  // blockaddress 进全局初始化器会被折叠成常量 1 且不产生重定位，
+  // 整条「存表 + 运行期异或 + indirectbr」的路在 LLVM 20 上不可用。
+  // 现在改由 switch 分发，只需要 cell key 和置换表。
+  std::vector<Constant *> KCell;
   for (unsigned I = 0; I < Cells; ++I)
     KCell.push_back(ConstantInt::get(I64, splitmix64(S)));
 
-  for (unsigned P = 0; P < N; ++P) {
-    // B35 修法：地址表存 ptrtoint(blockaddress)，而不是裸指针。
-    //
-    // 为什么不是裸指针：dispatcher 要算 `addr = tab[p] ^ key`。裸指针表
-    // 链接后高 32 位为 0（Android 用户态地址 < 4GB 时代如此，但共享库常被
-    // 加载到 0x7xxxxxxxxx），key 却是完整 64 位随机数 —— 异或后高位残留
-    // key，结果必然是野指针。实测 8 项目标全部落在 .text 之外，运行期直接
-    // SIGSEGV 在 0xf656f7b584d29917 这种地址上。
-    //
-    // ptrtoint 在静态初始化器里是合法的：它生成 R_AARCH64_ABS64（加法
-    // 重定位），链接器接受；B24 踩的是「xor + 重定位」，不是 ptrtoint 本身。
-    // 改成 i64 之后，tab[p] 与 key 都是真正的 64 位量，宽度失配消失。
-    Tab.push_back(
-        ConstantExpr::getPtrToInt(BlockAddress::get(&F, Blocks[P]), I64));
-    BKey.push_back(ConstantInt::get(I64, BlockKey[P]));
-  }
-
   GlobalVariable *KTab = makeTable(M, KCell, "obf.sm.kc");
-  GlobalVariable *AddrTab = makeTable(M, Tab, "obf.sm.ad");
-  GlobalVariable *KeyTab = makeTable(M, BKey, "obf.sm.bk");
   GlobalVariable *PermTab = makeTable(
       M,
       [&] {
@@ -234,25 +216,32 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
                                         {DB.getInt64(0), Cell});
     Value *P = DB.CreateLoad(I64, PermP, true, "obf.sm.p");
 
-    // 地址 = tab[p] ^ bkey[p]
-    auto *TabTy = cast<ArrayType>(AddrTab->getValueType());
-    auto *BkTy = cast<ArrayType>(KeyTab->getValueType());
-    Value *TabP = DB.CreateInBoundsGEP(TabTy, AddrTab, {DB.getInt64(0), P});
-    // 表项已经是 i64（ptrtoint 存进去的），不需要再 ptrtoint 一次
-    Value *Enc = DB.CreateLoad(I64, TabP, true, "obf.sm.e");
-    Value *BkP = DB.CreateInBoundsGEP(BkTy, KeyTab, {DB.getInt64(0), P});
-    Value *Bk = DB.CreateLoad(I64, BkP, true, "obf.sm.bk");
-    Value *AddrV = DB.CreateXor(Enc, Bk, "obf.sm.addr");
-    Value *Addr = DB.CreateIntToPtr(AddrV, PtrTy, "obf.sm.ap");
-
-    auto *IB = IndirectBrInst::Create(Addr, N, Disp);
-    // B10：入口块不能有任何前驱（LLVM 硬规则），所以它绝不能出现在
-    // dispatch 目标表里；漏了这一条 verifier 直接报
-    // "Entry block to function must not have predecessors!"。
-    BasicBlock *Entry = &F.getEntryBlock();
-    for (BasicBlock *BB : Blocks)
-      if (BB != Entry)
-        IB->addDestination(BB);
+    // ── B35 终版：用 switch 分发，不用 blockaddress 地址表 ──
+    //
+    // 原设计是 `addr = tab[p] ^ bkey[p]` 然后 indirectbr。这条路在
+    // LLVM 20 + 我们的 pass 组合下**根本不可用**：
+    //
+    //   `blockaddress(@f, %bb)` 一旦被放进全局初始化器（不管是裸 ptr 还是
+    //   ptrtoint），AsmPrinter 会把它折叠成常量 1，且**不生成任何重定位**。
+    //   实测最小复现（一个函数两个块、一张 1 项表）：
+    //       .data 内容 = 01 00 00 00 00 00 00 00   重定位 = 0 条
+    //   于是运行期 `1 ^ key` 得到野指针，br 过去直接 SIGSEGV。
+    //   这解释了 L2/L3 的 `Invalid memory fetch @0xc1bb...`——
+    //   也解释了为什么 `_start` 偶尔能跑（它的块恰好没被折叠）。
+    //
+    // 而且 SJI 本身会重建块（push + br disp），blockaddress 指向的旧块
+    // 在改造过程中已经被替换，即使后端支持也拿不到正确地址。
+    //
+    // 改用 switch：p 已经是置换过的下标（运行期算出、编译期不可知），
+    // 拿它当 case 值分发到对应块。后端会生成跳转表 + br，形态上仍是
+    // 间接跳转，且**不依赖任何 blockaddress**。
+    // 强度损失很小：置换表 perm、cell key 都还在，反编译照样要先解置换。
+    {
+      auto *SI = SwitchInst::Create(P, Blocks[0], N, Disp);
+      for (unsigned I = 1; I < N; ++I)
+        SI->addCase(ConstantInt::get(I64, I), Blocks[I]);
+      (void)SI;
+    }
   }
 
     // 5. 把所有 1~2 后继的边改成 push + br dispatcher
