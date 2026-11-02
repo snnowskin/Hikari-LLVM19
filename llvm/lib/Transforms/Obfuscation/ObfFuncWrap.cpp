@@ -35,11 +35,18 @@ static GlobalVariable *getCookieStack(Module &M) {
                                 ConstantAggregateZero::get(Ty), "obf.fw.stack");
   GV->setThreadLocalMode(GlobalValue::GeneralDynamicTLSModel);
   GV->setAlignment(Align(8));
-  // ★ 必须独立成节：TLS 变量的节带 SHF_TLS 位，普通 .data.obf 不带。
-  // 同名不同 flags 的两节 lld 直接报 `incompatible section flags for .data`
-  // （rt_probe.c L3 全档静态链接可复现）。TLS 有自己的一套寻址与 reloc，
-  // 与 key 表/种子槽混在一节本来也不对。
-  GV->setSection(".data.obf.tls");
+  // ★ B33：TLS 变量必须落进 lld 认得的 TLS 节名。
+  //
+  // 不能沿用 .data.obf（普通数据节，不带 SHF_TLS）—— 同名不同 flags，
+  // lld 直接报 `incompatible section flags for .data`。
+  //
+  // 也不能起个「.data 开头 + 自己带 TLS 位」的名字（试过 .data.obf.tls）：
+  // lld 的 orphan 归并按名字前缀把 .data.* 塞进输出 .data，于是「一个 WAT
+  // 混进一堆 WA」照样冲突。实测 `-obf-wrap-prob=100` 单独就能复现。
+  //
+  // 正解是标准 TLS 前缀 .tdata（已初始化）/ .tbss（零初始化）。lld 见到
+  // 这个前缀会走 PT_TLS 路径，与 .data 彻底分开。
+  GV->setSection(".tbss.obf"); // 两个全局初值都是 0
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
   return GV;
 }
@@ -53,11 +60,18 @@ static GlobalVariable *getCookieSp(Module &M) {
                                 ConstantInt::get(I64, 0), "obf.fw.sp");
   GV->setThreadLocalMode(GlobalValue::GeneralDynamicTLSModel);
   GV->setAlignment(Align(8));
-  // ★ 必须独立成节：TLS 变量的节带 SHF_TLS 位，普通 .data.obf 不带。
-  // 同名不同 flags 的两节 lld 直接报 `incompatible section flags for .data`
-  // （rt_probe.c L3 全档静态链接可复现）。TLS 有自己的一套寻址与 reloc，
-  // 与 key 表/种子槽混在一节本来也不对。
-  GV->setSection(".data.obf.tls");
+  // ★ B33：TLS 变量必须落进 lld 认得的 TLS 节名。
+  //
+  // 不能沿用 .data.obf（普通数据节，不带 SHF_TLS）—— 同名不同 flags，
+  // lld 直接报 `incompatible section flags for .data`。
+  //
+  // 也不能起个「.data 开头 + 自己带 TLS 位」的名字（试过 .data.obf.tls）：
+  // lld 的 orphan 归并按名字前缀把 .data.* 塞进输出 .data，于是「一个 WAT
+  // 混进一堆 WA」照样冲突。实测 `-obf-wrap-prob=100` 单独就能复现。
+  //
+  // 正解是标准 TLS 前缀 .tdata（已初始化）/ .tbss（零初始化）。lld 见到
+  // 这个前缀会走 PT_TLS 路径，与 .data 彻底分开。
+  GV->setSection(".tbss.obf"); // 两个全局初值都是 0
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
   return GV;
 }
