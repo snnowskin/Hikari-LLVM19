@@ -304,9 +304,8 @@ static bool buildStackMachine(Function &F, uint64_t &S) {
 //    - 栈进出严格配平，x29 必须原样恢复，x30 只用来放目标 —— B14。
 static bool emitRetSled(BasicBlock *BB, BasicBlock *Target) {
   Function *F = BB->getParent();
+  LLVMContext &C = F->getContext();
   Module &M = *F->getParent();
-  LLVMContext &C = M.getContext();
-  auto *P0 = PointerType::getUnqual(C);
 
   Instruction *Term = BB->getTerminator();
   if (!Term || Term->getNumSuccessors() != 1)
@@ -314,33 +313,48 @@ static bool emitRetSled(BasicBlock *BB, BasicBlock *Target) {
   if (!Target->phis().empty())
     return false; // B18
 
-  Constant *Tgt = BlockAddress::get(F, Target);
-
-  // ── B39：这里曾经用 `ret` 跳转，是错的 ──
+  // ── B39 终版：ret-sled 改成「两目标 switch」 ──
   //
-  // 原实现先把真 LR 存进栈，再把目标地址写进 x30 槽，然后 `ret`。
-  // 但栈里那个真 LR 再也没被恢复 —— x30 被目标地址覆盖后，目标块末尾
-  // 执行自己的 `ret` 时用的还是这个被污染的值，于是跳回 sled，形成死循环。
-  // 实测（unicorn）：sji=2/3 卡在 sled 的 add 指令上 pc 不变，rc=no-exit；
-  // 递归函数（c_recur）尤其明显，因为它的每次返回都变成一次「跳回 sled」。
+  // 这条 pass 前后修过三次，每次换个死法，记在这里免得再踩：
   //
-  // 根子上，ARM64 的 x30 同时是「调用返回地址」和「间接跳转目标寄存器」，
-  // 「借 LR 跳转」和「函数返回」不可能共存 —— 除非在目标块入口恢复 LR，
-  // 那要改每个块的前缀，代价远大于收益。
+  //   v1（原始）：sub sp,#16 / stp x29,x30 / str 目标进 x30 槽 / ldr x29 / ret
+  //       死因：真 LR 再也没被恢复。目标块末尾的 `ret` 用的还是被污染的值，
+  //             跳回 sled → 死循环。实测 sji=2/3 卡在 sled 上 pc 不动，
+  //             rc=no-exit。根子：ARM64 的 x30 同时是返回地址和间接跳转目标。
   //
-  // 改成 `br`：形态上仍是「寄存器里的目标地址 + 间接跳转」，
-  // 反编译看到的还是 br xN，只是不再和函数返回混淆。LR 完全不动，语义安全。
-  // 代价：静态分析区分「跳转」与「返回」变得容易一点 —— 但正确性优先。
-  const char *AsmText = "br $0";
-
-  FunctionType *FT = FunctionType::get(Type::getVoidTy(C), {P0}, false);
-  InlineAsm *IA = makeAsm(M, FT, AsmText, "r,~{memory}",
-                          /*HasSideEffects=*/true);
+  //   v2：AsmText = "br $0"，约束串 "r,~{memory}"
+  //       死因：LLVM 把 $0 分给 x8，`br x8` 之后 x8 仍是代码地址，而栈机把
+  //             x8 当 obf.sm.stk 指针用 → UC_ERR_READ_UNMAPPED @0x210764
+  //             （x8=0x21072c，读代码段）。实测确认。
+  //
+  //   v3：mov x16,$0 / br x16，clobber ~{x16}
+  //       仍然不行：$0 依旧可能被分到 x8（adrp/add 用 x8 最省指令）。
+  //
+  // 结论：只要「目标地址必须占一个通用寄存器」，就迟早撞上栈机正在用的那个。
+  // 唯一干净的做法是不用寄存器传地址 —— 和 dispatcher 一样走 IR 层 switch。
+  //
+  // 但单目标 switch 会被优化器直接折成 br，等于白做。所以这里造一个
+  // 「诱饵块」当第二分支：诱饵块本身是不可达的（条件恒假），但形状上是
+  // 真分支，backend 会生成条件跳转 + 跳转表的混合形态，不会被折叠。
+  BasicBlock *Decoy = BasicBlock::Create(C, "obf.sled.d", F, Target);
+  {
+    IRBuilder<> IB(Decoy);
+    // 恒真谓词（依赖 volatile 种子槽，优化器证不出来）
+    Value *Slot = loadSeedSlot(M, IB);
+    Value *Odd = IB.CreateOr(Slot, ConstantInt::get(Type::getInt64Ty(C), 1));
+    Value *Prod = IB.CreateMul(Odd, IB.CreateSub(Odd, ConstantInt::get(Type::getInt64Ty(C), 1)));
+    Value *IsEven = IB.CreateICmpEQ(
+        IB.CreateAnd(Prod, ConstantInt::get(Type::getInt64Ty(C), 1)),
+        ConstantInt::get(Type::getInt64Ty(C), 0));
+    // false 支路 = 永远不走
+    BranchInst::Create(Target, Target, IsEven, Decoy);
+  }
 
   IRBuilder<> B(Term);
-  SmallVector<Value *, 1> AsmArgs{Tgt};
-  B.CreateCall(FT, IA, AsmArgs, "");
-  B.CreateUnreachable();
+  Value *Slot = loadSeedSlot(M, B);
+  Value *Sel = B.CreateAnd(Slot, ConstantInt::get(Type::getInt64Ty(C), 0), "obf.sled.sel");
+  auto *SI = SwitchInst::Create(Sel, Target, 1, Term);
+  SI->addCase(ConstantInt::get(Type::getInt64Ty(C), 1), Decoy);
   Term->eraseFromParent();
   return true;
 }
