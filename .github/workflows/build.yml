@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
 
@@ -30,7 +30,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build ccache cmake python3
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.ccache
           key: ccache-linux-${{ github.run_id }}
@@ -63,7 +63,7 @@ jobs:
           tar czf clang-linux-x86_64.tar.gz -C x .
           ccache --show-stats || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clang-linux-x86_64
           path: clang-linux-x86_64.tar.gz
@@ -75,11 +75,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: clang-linux-x86_64
 
@@ -96,7 +96,7 @@ jobs:
           set -uo pipefail
           bash tests/gate.sh "$PWD/x/bin/clang" "$PWD/.gate"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: gate-logs-linux
@@ -109,7 +109,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
 
@@ -118,7 +118,7 @@ jobs:
       - name: ccache
         run: choco install ccache -y --no-progress
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: C:\Users\runneradmin\AppData\Local\ccache
           key: ccache-win-${{ github.run_id }}
@@ -154,7 +154,7 @@ jobs:
           Compress-Archive -Path out\* -DestinationPath clang-windows-x86_64.zip
           ccache --show-stats
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clang-windows-x86_64
           path: clang-windows-x86_64.zip
@@ -167,11 +167,11 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: clang-windows-x86_64
 
@@ -186,7 +186,7 @@ jobs:
           set -uo pipefail
           bash tests/gate.sh "$PWD/x/bin/clang.exe" "$PWD/.gate"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: gate-logs-windows
